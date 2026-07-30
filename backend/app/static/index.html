@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WLB大作战</title>
+  <link rel="stylesheet" href="/static/style.css?v=6">
+</head>
+<body>
+  <div id="auth-page" class="auth-page">
+    <div class="auth-card">
+      <div class="auth-logo"><span class="logo-icon">🎓</span></div>
+      <h2 class="auth-title">WLB大作战</h2>
+      <p class="auth-sub">打工人的秋招生存指南</p>
+      <div id="auth-form">
+        <div class="form-row"><input class="input" id="auth-user" placeholder="用户名"></div>
+        <div class="form-row"><input class="input" id="auth-pass" type="password" placeholder="密码"></div>
+        <div class="form-row"><input class="input" id="auth-nick" placeholder="昵称（注册时填）" style="display:none"></div>
+        <button class="btn primary full" id="auth-login-btn">登录</button>
+        <div class="auth-switch">没有账号？<a href="#" id="auth-toggle">注册</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app" id="app-main" style="display:none">
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-icon">🎓</span>
+        <span class="logo-text">WLB大作战</span>
+      </div>
+      <nav class="nav">
+        <div class="nav-item active" data-page="home" onclick="showPage('home')"><span class="icon">🏠</span><span class="label">首页概览</span></div>
+        <div class="nav-item" data-page="jobs" onclick="showPage('jobs')"><span class="icon">💼</span><span class="label">岗位浏览</span></div>
+        <div class="nav-item" data-page="track" onclick="showPage('track')"><span class="icon">📋</span><span class="label">投递跟踪</span></div>
+        <div class="nav-item" data-page="offers" onclick="showPage('offers')"><span class="icon">🎉</span><span class="label">我的Offer</span></div>
+        <div class="nav-item" data-page="review" onclick="showPage('review')"><span class="icon">📝</span><span class="label">面试复盘</span></div>
+        <div class="nav-item" data-page="calendar" onclick="showPage('calendar')"><span class="icon">🗓️</span><span class="label">日历视图</span></div>
+        <div class="nav-item" data-page="resume" onclick="showPage('resume')"><span class="icon">👤</span><span class="label">个人中心</span></div>
+        <div class="nav-item logout-item" onclick="logout()"><span class="icon">🚪</span><span class="label">退出</span></div>
+      </nav>
+      <div class="nav-bottom">
+        <div class="user-info" id="user-info"></div>
+        <div class="nav-item" onclick="logout()"><span class="icon">🚪</span><span class="label">退出登录</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="page-home" class="page active"></div>
+      <div id="page-jobs" class="page"></div>
+      <div id="page-track" class="page"></div>
+      <div id="page-offers" class="page"></div>
+      <div id="page-review" class="page"></div>
+      <div id="page-calendar" class="page"></div>
+      <div id="page-resume" class="page"></div>
+    </main>
+  </div>
+  <div class="modal-mask" id="modal-mask"></div>
+  <script src="/static/js/common.js?v=5"></script>
+  <script src="/static/js/auth.js?v=5"></script>
+  <script src="/static/js/home.js?v=5"></script>
+  <script src="/static/js/jobs.js?v=5"></script>
+  <script src="/static/js/track.js?v=5"></script>
+  <script src="/static/js/offers.js?v=5"></script>
+  <script src="/static/js/review.js?v=5"></script>
+  <script src="/static/js/calendar.js?v=5"></script>
+  <script src="/static/js/resume.js?v=5"></script>
+  <script>initAuth();</script>
+</body>
+</html>

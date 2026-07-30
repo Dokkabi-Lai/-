@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  wlb:
+    build: .
+    container_name: wlb-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      # Persist database and uploaded resumes
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+      # Config file (contains API keys)
+      - ./backend/config.yaml:/app/config.yaml:ro
+    environment:
+      - TZ=Asia/Shanghai
