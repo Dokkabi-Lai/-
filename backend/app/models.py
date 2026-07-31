@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -23,10 +24,6 @@ from .config import BASE_DIR, get_settings
 
 class Base(DeclarativeBase):
     pass
-
-
-def _now() -> dt.datetime:
-    return dt.datetime.now()
 
 
 # ---------- 用户 ----------
@@ -38,7 +35,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)  # bcrypt hashed
     nickname: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
     # relationships
     resumes: Mapped[list["Resume"]] = relationship("Resume", back_populates="user")
@@ -58,7 +55,7 @@ class Resume(Base):
     raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 解析出的纯文本
     structured: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # AI 解析的结构化数据
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
     # relationships
     user: Mapped[Optional["User"]] = relationship("User", back_populates="resumes")
@@ -75,7 +72,7 @@ class Preference(Base):
     desired_industries: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     min_salary: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # K
     max_company_size: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     # relationships
     user: Mapped[Optional["User"]] = relationship("User", back_populates="preferences")
@@ -105,7 +102,7 @@ class Job(Base):
     passed: Mapped[bool] = mapped_column(Boolean, default=False)  # 标记不感兴趣
     batch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 批次：27届秋招、27届提前批等
     raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 原始抓取数据
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
 
 # ---------- 投递记录 ----------
@@ -124,8 +121,8 @@ class Application(Base):
     status: Mapped[str] = mapped_column(String(50), default="已投递")
     # 已投递/进行中/已淘汰/已完成
     current_stage: Mapped[str] = mapped_column(String(50), default="投递")
-    applied_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    applied_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     rejected_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # 被淘汰的环节
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -152,7 +149,7 @@ class ApplicationStage(Base):
     form: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # 现场/线上
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
 
 # ---------- AI 生成内容缓存 ----------
@@ -167,7 +164,7 @@ class AICache(Base):
     target_id: Mapped[int] = mapped_column(Integer)  # job_id 或 position_id
     prompt_hash: Mapped[str] = mapped_column(String(64))
     result: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
 
 # ---------- 爬虫日志 ----------
@@ -180,10 +177,10 @@ class SpiderLog(Base):
     status: Mapped[str] = mapped_column(String(20))  # success / failed
     count: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    ran_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    ran_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
 
-# ---------- 引擎与会话 ----------
+# ---------- 数据库引擎与会话 ----------
 
 _engine = None
 _SessionLocal = None
@@ -193,11 +190,16 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        db_path = BASE_DIR / settings.db.path
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Use PostgreSQL if DATABASE_URL is set (Koyeb), otherwise SQLite
+        if settings.db.url:
+            db_url = settings.db.url
+        else:
+            db_path = BASE_DIR / settings.db.path
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_url = f"sqlite:///{db_path}"
         _engine = create_engine(
-            f"sqlite:///{db_path}",
-            connect_args={"check_same_thread": False},
+            db_url,
+            connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
             echo=False,
         )
     return _engine

@@ -41,6 +41,7 @@ class AppConfig(BaseModel):
 
 class DBConfig(BaseModel):
     path: str = "data/app.db"
+    url: str = ""  # PostgreSQL connection URL from env var
 
 
 class StorageConfig(BaseModel):
@@ -93,6 +94,10 @@ def get_settings() -> Settings:
         env_model = os.environ.get("LLM_MODEL")
         if env_model:
             getattr(_settings.llm, _settings.llm.provider).model = env_model
+        # PostgreSQL override from Koyeb
+        env_db_url = os.environ.get("DATABASE_URL")
+        if env_db_url:
+            _settings.db.url = env_db_url
     return _settings
 
 
