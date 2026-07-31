@@ -1,6 +1,50 @@
 # WLB大作战 - 部署指南
 
-## 方式零：Railway 免费部署（推荐，不花钱）
+## 方式零：Koyeb 免费部署（国内可访问，无需信用卡）
+
+Koyeb 提供永久免费实例（1个 Web 服务 + 1GB PostgreSQL 数据库），国内可直接访问。
+
+### 步骤
+
+1. **安装 Koyeb CLI**
+```bash
+curl -L "https://github.com/koyeb/koyeb-cli/releases/latest/download/koyeb_linux_amd64" -o koyeb
+chmod +x koyeb
+sudo mv koyeb /usr/local/bin/
+```
+
+2. **登录 Koyeb**
+```bash
+koyeb login
+# 会打开浏览器，用 GitHub 账号登录即可，无需信用卡
+```
+
+3. **部署应用**
+```bash
+cd /Users/laishuhuan/Desktop/求职软件
+koyeb init --config koyeb.yml
+koyeb deploy
+```
+
+4. **配置环境变量**
+- 在 Koyeb 控制台找到你的应用
+- Environment Variables 添加：
+  - `LLM_API_KEY` = 你的 DeepSeek API Key
+  - `POSTGRES_PASSWORD` = 设置一个数据库密码（自定义）
+
+5. **访问应用**
+- 部署完成后会获得一个公网域名，如 `https://xxx.koyeb.app`
+- 分享给别人即可使用
+
+### 注意事项
+- 免费版：1 个 Web 服务 + 1GB PostgreSQL
+- 不支持持久化卷（但用 PostgreSQL 数据库代替，数据不会丢）
+- 无信用卡要求
+- 国内访问速度一般，但可用
+
+---
+
+## 方式一：Railway 免费部署（需翻墙）
 
 Railway 提供每月 $1 免费额度 + 0.5GB 持久化存储，足够个人使用。
 
