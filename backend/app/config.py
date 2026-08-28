@@ -37,6 +37,9 @@ class AppConfig(BaseModel):
     name: str = "WLB大作战"
     host: str = "127.0.0.1"
     port: int = 8000
+    jwt_secret: str = "development-only-change-me-please-32bytes"
+    jwt_expire_days: int = 30
+    admin_emails: list[str] = []
 
 
 class DBConfig(BaseModel):
@@ -46,6 +49,43 @@ class DBConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     resume_dir: str = "data/resumes"
+    avatar_dir: str = "data/avatars"
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_bucket: str = "avatars"
+
+
+class FeishuConfig(BaseModel):
+    app_id: str = ""
+    app_secret: str = ""
+    spreadsheet_token: str = ""  # 表格链接或 token
+    sheet_id: str = ""  # 留空则取第一个工作表
+    sync_enabled: bool = False
+    sync_hour: int = 6
+    sync_minute: int = 0
+
+
+class JobsConfig(BaseModel):
+    excel_path: str = ""
+    feishu: FeishuConfig = FeishuConfig()
+
+
+class SmtpConfig(BaseModel):
+    host: str = ""
+    port: int = 465
+    username: str = ""
+    password: str = ""
+    from_addr: str = ""
+    from_name: str = "WLB大作战"
+    use_ssl: bool = True
+    use_tls: bool = False
+
+
+class EmailConfig(BaseModel):
+    code_ttl: int = 300
+    code_length: int = 6
+    send_interval: int = 60
+    smtp: SmtpConfig = SmtpConfig()
 
 
 class Settings(BaseModel):
@@ -54,6 +94,8 @@ class Settings(BaseModel):
     spider: SpiderConfig = SpiderConfig()
     db: DBConfig = DBConfig()
     storage: StorageConfig = StorageConfig()
+    jobs: JobsConfig = JobsConfig()
+    email: EmailConfig = EmailConfig()
 
     def llm_provider_config(self) -> LLMProviderConfig:
         """返回当前 provider 的配置。"""
@@ -98,6 +140,51 @@ def get_settings() -> Settings:
         env_db_url = os.environ.get("DATABASE_URL")
         if env_db_url:
             _settings.db.url = env_db_url
+        env_jwt_secret = os.environ.get("JWT_SECRET")
+        if env_jwt_secret:
+            _settings.app.jwt_secret = env_jwt_secret
+        env_admins = os.environ.get("ADMIN_EMAILS")
+        if env_admins:
+            _settings.app.admin_emails = [
+                value.strip().lower() for value in env_admins.split(",") if value.strip()
+            ]
+        for env_key, attr in (
+            ("SUPABASE_URL", "supabase_url"),
+            ("SUPABASE_SERVICE_ROLE_KEY", "supabase_service_role_key"),
+            ("SUPABASE_STORAGE_BUCKET", "supabase_bucket"),
+        ):
+            env_val = os.environ.get(env_key)
+            if env_val:
+                setattr(_settings.storage, attr, env_val)
+        for env_key, attr in (
+            ("SMTP_HOST", "host"),
+            ("SMTP_USER", "username"),
+            ("SMTP_PASSWORD", "password"),
+            ("SMTP_FROM", "from_addr"),
+            ("SMTP_FROM_NAME", "from_name"),
+        ):
+            env_val = os.environ.get(env_key)
+            if env_val:
+                setattr(_settings.email.smtp, attr, env_val)
+        env_smtp_port = os.environ.get("SMTP_PORT")
+        if env_smtp_port:
+            _settings.email.smtp.port = int(env_smtp_port)
+        for env_key, attr in (
+            ("FEISHU_APP_ID", "app_id"),
+            ("FEISHU_APP_SECRET", "app_secret"),
+            ("FEISHU_SPREADSHEET_TOKEN", "spreadsheet_token"),
+            ("FEISHU_SHEET_ID", "sheet_id"),
+        ):
+            env_val = os.environ.get(env_key)
+            if env_val:
+                setattr(_settings.jobs.feishu, attr, env_val)
+        env_feishu_sync = os.environ.get("FEISHU_SYNC_ENABLED")
+        if env_feishu_sync:
+            _settings.jobs.feishu.sync_enabled = env_feishu_sync.lower() in {"1", "true", "yes", "on"}
+        if os.environ.get("FEISHU_SYNC_HOUR"):
+            _settings.jobs.feishu.sync_hour = int(os.environ["FEISHU_SYNC_HOUR"])
+        if os.environ.get("FEISHU_SYNC_MINUTE"):
+            _settings.jobs.feishu.sync_minute = int(os.environ["FEISHU_SYNC_MINUTE"])
     return _settings
 
 

@@ -5,6 +5,9 @@ app:
   name: WLB大作战
   host: 0.0.0.0
   port: 8000
+  jwt_secret: "请在生产环境通过 JWT_SECRET 设置随机长字符串"
+  jwt_expire_days: 30
+  admin_emails: []
 
 # 大模型配置
 llm:
@@ -45,6 +48,40 @@ spider:
 db:
   path: data/app.db
 
-# Resume file storage
+# 文件存储；云部署建议通过 SUPABASE_* 环境变量覆盖
 storage:
   resume_dir: data/resumes
+  avatar_dir: data/avatars
+  supabase_url: ""
+  supabase_service_role_key: ""
+  supabase_bucket: avatars
+
+# 岗位数据源
+jobs:
+  excel_path: ../洒水车秋招_岗位信息表_总表.xlsx
+  feishu:
+    app_id: ""
+    app_secret: ""
+    # 新群组在网站内绑定各自表格；以下链接仅作为默认岗位群的兼容配置
+    spreadsheet_token: ""
+    sheet_id: ""
+    sync_enabled: false
+    sync_hour: 6
+    sync_minute: 0
+
+# 邮件配置（当前采用密码注册，暂不启用验证码）
+# QQ 邮箱示例：host=smtp.qq.com, port=465, use_ssl=true
+# 需在邮箱设置中开启 SMTP 并使用「授权码」作为 password
+email:
+  code_ttl: 300
+  code_length: 6
+  send_interval: 60
+  smtp:
+    host: smtp.qq.com
+    port: 465
+    username: "your@qq.com"
+    password: "你的SMTP授权码"
+    from_addr: "your@qq.com"
+    from_name: "WLB大作战"
+    use_ssl: true
+    use_tls: false

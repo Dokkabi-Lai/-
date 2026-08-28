@@ -33,14 +33,96 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(200), nullable=False)  # bcrypt hashed
+    password_hash: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    phone: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(200), unique=True, nullable=True, index=True)
     nickname: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    avatar_type: Mapped[str] = mapped_column(String(20), default="emoji")
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    avatar_emoji: Mapped[str] = mapped_column(String(32), default="🌱")
+    bio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    school: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    major: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    graduation_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_roles: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    target_cities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    active_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("groups.id"), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     # relationships
     resumes: Mapped[list["Resume"]] = relationship("Resume", back_populates="user")
     preferences: Mapped[list["Preference"]] = relationship("Preference", back_populates="user")
     applications: Mapped[list["Application"]] = relationship("Application", back_populates="user")
+    job_marks: Mapped[list["JobMark"]] = relationship("JobMark", back_populates="user")
+
+
+class Group(Base):
+    """多人协作维护的岗位空间；投递记录仍属于个人。"""
+    __tablename__ = "groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    feishu_spreadsheet_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    feishu_sheet_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    feishu_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_member"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), default="member")
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    joined_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+
+
+class GroupInvite(Base):
+    __tablename__ = "group_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    revoked_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+
+
+class JobMark(Base):
+    """用户对岗位的个人标记（Pass / 收藏），互不影响。"""
+    __tablename__ = "job_marks"
+    __table_args__ = (UniqueConstraint("user_id", "job_id", name="uq_user_job_mark"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    favorited: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="job_marks")
+
+
+class EmailVerification(Base):
+    """邮箱验证码记录。"""
+    __tablename__ = "email_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(10), nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
 
 
 # ---------- 简历与画像 ----------
@@ -81,28 +163,49 @@ class Preference(Base):
 # ---------- 岗位 ----------
 
 class Job(Base):
-    """秋招岗位（全局共享的爬虫数据）。"""
+    """秋招岗位（Excel 导入）。"""
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_job_source"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source: Mapped[str] = mapped_column(String(50))  # nowcoder / company_xxx / manual
+    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
+    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(50))  # excel / manual
     source_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     company: Mapped[str] = mapped_column(String(200))
     title: Mapped[str] = mapped_column(String(200))
+    company_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     salary: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     open_date: Mapped[Optional[dt.date]] = mapped_column(DateTime, nullable=True)
     close_date: Mapped[Optional[dt.date]] = mapped_column(DateTime, nullable=True)
+    close_date_text: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    apply_rule: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     referrer_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 内推码
     favorited: Mapped[bool] = mapped_column(Boolean, default=False)
     passed: Mapped[bool] = mapped_column(Boolean, default=False)  # 标记不感兴趣
     batch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 批次：27届秋招、27届提前批等
     raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 原始抓取数据
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class SyncState(Base):
+    """外部岗位源的最近同步状态。"""
+    __tablename__ = "sync_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="idle")
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    deactivated_count: Mapped[int] = mapped_column(Integer, default=0)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    synced_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
 
 
 # ---------- 投递记录 ----------
@@ -193,6 +296,8 @@ def get_engine():
         # Use PostgreSQL if DATABASE_URL is set (Koyeb), otherwise SQLite
         if settings.db.url:
             db_url = settings.db.url
+            if db_url.startswith("postgres://"):
+                db_url = "postgresql://" + db_url[len("postgres://"):]
         else:
             db_path = BASE_DIR / settings.db.path
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +306,7 @@ def get_engine():
             db_url,
             connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
             echo=False,
+            pool_pre_ping=True,
         )
     return _engine
 
@@ -212,9 +318,102 @@ def get_sessionmaker():
     return _SessionLocal
 
 
+def _migrate_db(engine) -> None:
+    """轻量迁移：为已有数据库补充新字段。"""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "users" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("users")}
+        with engine.begin() as conn:
+            if "phone" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(20)"))
+            if "email" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(200)"))
+            user_columns = {
+                "avatar_type": "VARCHAR(20)",
+                "avatar_url": "VARCHAR(500)",
+                "avatar_emoji": "VARCHAR(32)",
+                "bio": "TEXT",
+                "school": "VARCHAR(120)",
+                "major": "VARCHAR(120)",
+                "graduation_year": "INTEGER",
+                "target_roles": "JSON",
+                "target_cities": "JSON",
+                "is_admin": "BOOLEAN",
+                "active_group_id": "INTEGER",
+                "updated_at": "TIMESTAMP",
+            }
+            for name, sql_type in user_columns.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {sql_type}"))
+            conn.execute(text(
+                "UPDATE users SET avatar_type = COALESCE(avatar_type, 'emoji'), "
+                "avatar_emoji = COALESCE(avatar_emoji, '🌱'), "
+                "is_admin = COALESCE(is_admin, false)"
+            ))
+    if "jobs" in insp.get_table_names():
+        job_cols = {c["name"] for c in insp.get_columns("jobs")}
+        with engine.begin() as conn:
+            if "company_type" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN company_type VARCHAR(50)"))
+            if "apply_rule" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN apply_rule VARCHAR(100)"))
+            if "close_date_text" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN close_date_text VARCHAR(100)"))
+            if "is_active" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN is_active BOOLEAN"))
+                conn.execute(text("UPDATE jobs SET is_active = true WHERE is_active IS NULL"))
+            if "updated_at" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN updated_at TIMESTAMP"))
+            if "group_id" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN group_id INTEGER"))
+            if "created_by_id" not in job_cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN created_by_id INTEGER"))
+
+
+def _ensure_default_group(engine) -> None:
+    """把升级前的全局岗位和用户安全迁入默认群组。"""
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    db = Session()
+    try:
+        group = db.query(Group).filter(Group.is_system.is_(True)).order_by(Group.id).first()
+        users = db.query(User).order_by(User.id).all()
+        if not group:
+            owner = next((u for u in users if u.is_admin), users[0] if users else None)
+            group = Group(name="默认岗位群", description="升级前的共享岗位库", owner_id=owner.id if owner else None, is_system=True)
+            db.add(group)
+            db.flush()
+        elif not group.owner_id and users:
+            owner = next((u for u in users if u.is_admin), users[0])
+            group.owner_id = owner.id
+
+        existing_user_ids = {
+            row[0] for row in db.query(GroupMember.user_id).filter(GroupMember.group_id == group.id).all()
+        }
+        for user in users:
+            if user.id not in existing_user_ids:
+                db.add(GroupMember(
+                    group_id=group.id,
+                    user_id=user.id,
+                    role="owner" if user.id == group.owner_id else "member",
+                ))
+            if not user.active_group_id:
+                user.active_group_id = group.id
+        db.query(Job).filter(Job.group_id.is_(None)).update(
+            {Job.group_id: group.id}, synchronize_session=False
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def init_db():
     """建表。"""
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    _migrate_db(engine)
+    _ensure_default_group(engine)
 
 
 def get_db():

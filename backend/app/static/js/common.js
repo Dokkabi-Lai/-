@@ -1,14 +1,38 @@
 // === 通用请求 ===
 function _authHeader() {
   var user = JSON.parse(localStorage.getItem("user") || "null");
-  return user ? { "Authorization": "Bearer " + user.token } : {};
+  if (!user) return {};
+  var headers = { "Authorization": "Bearer " + user.token };
+  var groupId = localStorage.getItem("activeGroupId") || user.active_group_id;
+  if (groupId) headers["X-Group-Id"] = String(groupId);
+  return headers;
+}
+
+function getActiveGroupId() {
+  return Number(localStorage.getItem("activeGroupId") || (currentUser && currentUser.active_group_id) || 0);
+}
+
+function setActiveGroupId(groupId) {
+  localStorage.setItem("activeGroupId", String(groupId));
+  if (currentUser) {
+    currentUser.active_group_id = Number(groupId);
+    localStorage.setItem("user", JSON.stringify(currentUser));
+  }
+}
+
+async function _parseResponse(r, url) {
+  if (r.ok) return r.json();
+  if (r.status === 401 && !["/api/auth/login", "/api/auth/register"].includes(url || "")) {
+    localStorage.removeItem("user");
+    if (typeof showAuthPage === "function") showAuthPage();
+  }
+  throw new Error(await r.text());
 }
 
 const API = {
   async get(url) {
     const r = await fetch(url, { headers: _authHeader() });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    return _parseResponse(r, url);
   },
   async post(url, body) {
     const r = await fetch(url, {
@@ -16,8 +40,7 @@ const API = {
       headers: Object.assign({ "Content-Type": "application/json" }, _authHeader()),
       body: body ? JSON.stringify(body) : undefined,
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    return _parseResponse(r, url);
   },
   async patch(url, body) {
     const r = await fetch(url, {
@@ -25,18 +48,15 @@ const API = {
       headers: Object.assign({ "Content-Type": "application/json" }, _authHeader()),
       body: body ? JSON.stringify(body) : undefined,
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    return _parseResponse(r, url);
   },
   async del(url) {
     const r = await fetch(url, { method: "DELETE", headers: _authHeader() });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    return _parseResponse(r, url);
   },
   async upload(url, formData) {
     const r = await fetch(url, { method: "POST", body: formData, headers: _authHeader() });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    return _parseResponse(r, url);
   },
 };
 
@@ -134,6 +154,10 @@ function showModal(title, contentNode, footerNodes) {
 function closeModal() {
   document.getElementById("modal-mask").classList.remove("show");
 }
+
+document.addEventListener("keydown", function(event) {
+  if (event.key === "Escape") closeModal();
+});
 
 function toast(msg, type) {
   var t = el("div", { class: "toast" + (type ? " " + type : "") }, msg);

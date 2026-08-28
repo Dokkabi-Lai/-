@@ -8,12 +8,14 @@ from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
-from ..models import Job, get_db
+from ..models import Application, Group, Job, JobMark, User, get_db
+from ..services.group_service import is_platform_admin
+from .deps import get_current_group, get_current_user, require_group_owner
 
 logger = logging.getLogger(__name__)
 
@@ -42,22 +44,41 @@ class JobOut(BaseModel):
 class JobCreate(BaseModel):
     company: str
     title: str
+    company_type: Optional[str] = None
+    batch: Optional[str] = None
     location: Optional[str] = None
     salary: Optional[str] = None
     description: Optional[str] = None
     requirements: Optional[str] = None
     open_date: Optional[str] = None
     close_date: Optional[str] = None
+    close_date_text: Optional[str] = None
+    apply_rule: Optional[str] = None
     url: Optional[str] = None
     referrer_code: Optional[str] = None
 
 
-def _serialize(job: Job) -> dict:
+def _marks_map(db: Session, user_id: int) -> dict[int, JobMark]:
+    rows = db.query(JobMark).filter(JobMark.user_id == user_id).all()
+    return {m.job_id: m for m in rows}
+
+
+def _get_mark(db: Session, user_id: int, job_id: int) -> JobMark:
+    mark = db.query(JobMark).filter_by(user_id=user_id, job_id=job_id).first()
+    if not mark:
+        mark = JobMark(user_id=user_id, job_id=job_id, passed=False, favorited=False)
+        db.add(mark)
+        db.flush()
+    return mark
+
+
+def _serialize(job: Job, applied: bool = False, mark: JobMark | None = None) -> dict:
     return {
         "id": job.id,
         "source": job.source,
         "company": job.company,
         "title": job.title,
+        "company_type": job.company_type,
         "location": job.location,
         "salary": job.salary,
         "description": job.description,
@@ -65,10 +86,16 @@ def _serialize(job: Job) -> dict:
         "batch": job.batch,
         "open_date": job.open_date.isoformat() if job.open_date else None,
         "close_date": job.close_date.isoformat() if job.close_date else None,
+        "close_date_text": job.close_date_text,
+        "apply_rule": job.apply_rule,
         "url": job.url,
         "referrer_code": job.referrer_code,
-        "favorited": job.favorited,
-        "passed": job.passed,
+        "favorited": bool(mark.favorited) if mark else False,
+        "passed": bool(mark.passed) if mark else False,
+        "applied": applied,
+        "is_active": job.is_active is not False,
+        "created_by_id": job.created_by_id,
+        "group_id": job.group_id,
     }
 
 
@@ -77,16 +104,32 @@ def list_jobs(
     keyword: Optional[str] = None,
     location: Optional[str] = None,
     batch: Optional[str] = None,
+    company_type: Optional[str] = None,
     favorited: Optional[bool] = None,
     only_open: bool = False,
-    hide_passed: bool = True,  # 默认隐藏已pass的
+    source: Optional[str] = None,
+    hide_passed: bool = True,
+    applied: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
 ):
-    q = db.query(Job)
+    applied_ids = {
+        r[0]
+        for r in db.query(Application.job_id).filter(
+            Application.user_id == user.id,
+            Application.job_id.isnot(None),
+        ).all()
+        if r[0]
+    }
+    marks = _marks_map(db, user.id)
+    q = db.query(Job).filter(Job.group_id == group.id, Job.is_active.is_not(False))
     if hide_passed:
-        q = q.filter(or_(Job.passed == False, Job.passed == None))
+        passed_ids = [jid for jid, m in marks.items() if m.passed]
+        if passed_ids:
+            q = q.filter(~Job.id.in_(passed_ids))
     if keyword:
         q = q.filter(or_(
             Job.company.contains(keyword),
@@ -97,44 +140,224 @@ def list_jobs(
         q = q.filter(Job.location.contains(location))
     if batch:
         q = q.filter(Job.batch == batch)
+    if company_type:
+        q = q.filter(Job.company_type == company_type)
+    if source:
+        q = q.filter(Job.source == source)
     if favorited is not None:
-        q = q.filter(Job.favorited == favorited)
+        fav_ids = [jid for jid, m in marks.items() if m.favorited]
+        if favorited:
+            q = q.filter(Job.id.in_(fav_ids or [-1]))
+        elif fav_ids:
+            q = q.filter(~Job.id.in_(fav_ids))
     if only_open:
         today = dt.date.today()
         q = q.filter(or_(Job.close_date == None, Job.close_date >= today))
+    if applied == "applied" and applied_ids:
+        q = q.filter(Job.id.in_(applied_ids))
+    elif applied == "applied":
+        q = q.filter(Job.id == -1)
+    elif applied == "unapplied" and applied_ids:
+        q = q.filter(~Job.id.in_(applied_ids))
     total = q.count()
     rows = q.order_by(desc(Job.created_at)).offset(offset).limit(limit).all()
-    return {"total": total, "items": [_serialize(j) for j in rows]}
+    return {"total": total, "items": [_serialize(j, j.id in applied_ids, marks.get(j.id)) for j in rows]}
 
 
 @router.get("/batches/list")
-def list_batches(db: Session = Depends(get_db)):
+def list_batches(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
     """获取所有可用批次列表"""
     from sqlalchemy import func
-    rows = db.query(Job.batch, func.count(Job.id)).filter(Job.batch.isnot(None)).group_by(Job.batch).all()
+    rows = db.query(Job.batch, func.count(Job.id)).filter(
+        Job.group_id == group.id, Job.batch.isnot(None), Job.is_active.is_not(False)
+    ).group_by(Job.batch).all()
     return [{"batch": b, "count": c} for b, c in rows]
 
 
+@router.get("/company-types/list")
+def list_company_types(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    from sqlalchemy import func
+    rows = db.query(Job.company_type, func.count(Job.id)).filter(
+        Job.group_id == group.id, Job.company_type.isnot(None), Job.is_active.is_not(False)
+    ).group_by(Job.company_type).all()
+    return [{"company_type": t, "count": c} for t, c in rows]
+
+
+@router.get("/import/status")
+def import_status(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    from ..services.excel_import_service import import_status as _status
+
+    result = _status(db, group_id=group.id)
+    result["can_manage"] = True
+    result["can_sync"] = bool(is_platform_admin(user) or group.owner_id == user.id)
+    return result
+
+
+@router.post("/import/reload")
+def reload_from_excel(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(require_group_owner),
+):
+    """从最近一次上传或配置的 Excel 重新导入岗位。"""
+    from ..services.excel_import_service import import_jobs_from_excel
+
+    try:
+        result = import_jobs_from_excel(db=db, group_id=group.id, created_by_id=user.id)
+        return {"message": "导入完成", **result}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"导入失败: {e}")
+
+
+@router.post("/import/upload")
+async def upload_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(require_group_owner),
+):
+    """上传 Excel / CSV 覆盖岗位库（推荐每天更新用这个）。"""
+    from ..services.excel_import_service import import_jobs_from_bytes
+
+    name = (file.filename or "").lower()
+    if not name.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "请上传 .xlsx 表格（飞书：文件 → 下载为 Excel）")
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "文件是空的")
+    try:
+        result = import_jobs_from_bytes(
+            content, save_as_latest=True, db=db, group_id=group.id, created_by_id=user.id
+        )
+        return {"message": "上传并导入完成", **result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"导入失败: {e}")
+
+
+@router.post("/import/feishu")
+def import_from_feishu(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(require_group_owner),
+):
+    """从飞书电子表格同步岗位。"""
+    from ..services.feishu_service import sync_jobs_from_feishu
+
+    try:
+        result = sync_jobs_from_feishu(db=db, group_id=group.id)
+        return {"message": "飞书同步完成", **result}
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"飞书同步失败: {e}")
+
+
+@router.post("/import/rows")
+def import_rows(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    """接收类 Excel 网格提交的固定字段岗位。"""
+    from ..services.excel_import_service import import_job_items, parse_value_rows
+
+    rows = body.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "请至少填写一行岗位")
+    if len(rows) > 300:
+        raise HTTPException(400, "单次最多导入 300 行")
+    keys = [
+        "company", "company_type", "batch", "location", "title", "description",
+        "url", "open_date", "close_date", "apply_rule", "referrer_code", "recorded_at",
+    ]
+    headers = [
+        "公司", "公司类型", "批次", "BASE", "岗位", "岗位JD",
+        "投递链接", "开始日期", "截止日期", "投递机制", "内推码", "记录时间",
+    ]
+    values = []
+    errors = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            errors.append({"row": index, "message": "行格式不正确"})
+            continue
+        company = str(row.get("company") or "").strip()
+        title = str(row.get("title") or "").strip()
+        if not company or not title:
+            errors.append({"row": index, "message": "公司和岗位为必填项"})
+            continue
+        values.append([row.get(key) for key in keys])
+    items = parse_value_rows(headers, values)
+    if not items:
+        raise HTTPException(400, {"message": "没有可导入的岗位", "errors": errors})
+    result = import_job_items(
+        items,
+        db=db,
+        source_label="manual",
+        group_id=group.id,
+        created_by_id=user.id,
+    )
+    return {"message": "岗位已加入群组", **result, "errors": errors}
+
+
 @router.get("/{job_id}")
-def get_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(Job).get(job_id)
+def get_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
     if not job:
         raise HTTPException(404, "岗位不存在")
-    return _serialize(job)
+    applied = db.query(Application).filter(
+        Application.user_id == user.id, Application.job_id == job_id
+    ).first() is not None
+    return _serialize(job, applied, _marks_map(db, user.id).get(job.id))
 
 
 @router.post("")
-def add_job(data: JobCreate, db: Session = Depends(get_db)):
+def add_job(
+    data: JobCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
     job = Job(
         source="manual",
+        source_id=f"g{group.id}-manual-{dt.datetime.now().timestamp()}-{user.id}",
+        group_id=group.id,
+        created_by_id=user.id,
         company=data.company,
         title=data.title,
+        company_type=data.company_type,
+        batch=data.batch,
         location=data.location,
         salary=data.salary,
         description=data.description,
         requirements=data.requirements,
         open_date=dt.date.fromisoformat(data.open_date) if data.open_date else None,
         close_date=dt.date.fromisoformat(data.close_date) if data.close_date else None,
+        close_date_text=data.close_date_text,
+        apply_rule=data.apply_rule,
         url=data.url,
         referrer_code=data.referrer_code,
     )
@@ -144,52 +367,75 @@ def add_job(data: JobCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/favorite")
-def toggle_favorite(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(Job).get(job_id)
+def toggle_favorite(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
     if not job:
         raise HTTPException(404, "岗位不存在")
-    job.favorited = not job.favorited
+    mark = _get_mark(db, user.id, job_id)
+    mark.favorited = not mark.favorited
     db.commit()
-    return {"favorited": job.favorited}
+    return {"favorited": mark.favorited}
 
 
 @router.delete("/{job_id}")
-def delete_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(Job).get(job_id)
+def delete_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
     if not job:
         raise HTTPException(404, "岗位不存在")
-    db.delete(job)
+    if not is_platform_admin(user) and group.owner_id != user.id and job.created_by_id != user.id:
+        raise HTTPException(403, "只能下架自己添加的岗位")
+    job.is_active = False
     db.commit()
     return {"ok": True}
 
 
 @router.post("/pass-company")
-def pass_company(body: dict, db: Session = Depends(get_db)):
-    """Pass/取消Pass整个公司所有岗位"""
+def pass_company(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
     company = body.get("company", "").strip()
     if not company:
         raise HTTPException(400, "company 不能为空")
-    jobs = db.query(Job).filter(Job.company == company).all()
+    jobs = db.query(Job).filter(Job.group_id == group.id, Job.company == company).all()
     if not jobs:
         raise HTTPException(404, "没有找到该公司岗位")
-    # 判断当前状态：如果全部已pass则取消pass，否则全部pass
-    all_passed = all(j.passed for j in jobs)
+    marks = _marks_map(db, user.id)
+    all_passed = bool(jobs) and all(marks.get(j.id) and marks[j.id].passed for j in jobs)
     new_val = not all_passed
     for j in jobs:
-        j.passed = new_val
+        mark = _get_mark(db, user.id, j.id)
+        mark.passed = new_val
     db.commit()
     return {"company": company, "passed": new_val, "count": len(jobs)}
 
 
 @router.post("/{job_id}/pass")
-def toggle_pass(job_id: int, db: Session = Depends(get_db)):
-    """标记/取消标记不感兴趣"""
-    job = db.query(Job).get(job_id)
+def toggle_pass(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
     if not job:
         raise HTTPException(404, "岗位不存在")
-    job.passed = not job.passed
+    mark = _get_mark(db, user.id, job_id)
+    mark.passed = not mark.passed
     db.commit()
-    return {"passed": job.passed}
+    return {"passed": mark.passed}
 
 
 # ---------- 抓取 JD ----------
@@ -560,7 +806,12 @@ def _llm_extract_jd(job_title: str, page_text: str) -> tuple[str, Optional[str]]
 
 
 @router.post("/{job_id}/fetch-jd")
-def fetch_jd(job_id: int, db: Session = Depends(get_db)):
+def fetch_jd(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
     """从岗位的网申链接抓取特定岗位的 JD 内容。
 
     改进点：
@@ -569,7 +820,7 @@ def fetch_jd(job_id: int, db: Session = Depends(get_db)):
     - 用 LLM 从页面文本中提取特定岗位的 JD（职责 + 要求）
     - 保存到 description 和 requirements 字段
     """
-    job = db.query(Job).get(job_id)
+    job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
     if not job:
         raise HTTPException(404, "岗位不存在")
     if not job.url:

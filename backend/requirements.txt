@@ -15,3 +15,5 @@ openpyxl==3.1.2
 playwright==1.60.0
 python-dotenv==1.2.1
 psycopg2-binary==2.9.9
+bcrypt==5.0.0
+PyJWT==2.13.0

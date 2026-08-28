@@ -99,7 +99,7 @@ function appCard(app) {
         el("div", { class: "pipeline-title" }, app.title),
         el("div", { class: "pipeline-meta" },
           app.channel ? el("span", { class: "chip sm" }, app.channel) : null,
-          el("span", { class: "text-sm muted" }, "投递于 " + (app.applied_at || "").slice(0, 10)),
+          el("span", { class: "text-sm muted", style: "cursor:pointer", title: "点击修改投递时间", onclick: function(e) { e.stopPropagation(); editApplication(app); } }, "投递于 " + (app.applied_at || "").slice(0, 10)),
           isRejected ? el("span", { class: "chip sm rejected-chip" }, "❌ " + (app.rejected_stage || "") + "淘汰") : null
         )
       )
@@ -300,9 +300,11 @@ function showStageEditor(app, stageName, stageData) {
 }
 
 function editApplication(app) {
+  var appliedVal = (app.applied_at || "").slice(0, 16);
   var body = el("div", {},
     formRow("公司", el("input", { class: "input", id: "ea-company", value: app.company })),
     formRow("岗位", el("input", { class: "input", id: "ea-title", value: app.title })),
+    formRow("投递时间", el("input", { class: "input", id: "ea-applied", type: "datetime-local", value: appliedVal })),
     formRow("投递渠道", el("input", { class: "input", id: "ea-channel", value: app.channel || "" })),
     formRow("备注", el("textarea", { class: "textarea", id: "ea-notes" }, app.notes || ""))
   );
@@ -310,6 +312,7 @@ function editApplication(app) {
     el("button", { class: "btn primary", onclick: async function() {
       await API.patch("/api/applications/" + app.id, {
         company: val("ea-company"), title: val("ea-title"),
+        applied_at: val("ea-applied") || null,
         channel: val("ea-channel") || null, notes: val("ea-notes") || null
       });
       toast("已更新"); closeModal(); loadApplications();
@@ -330,6 +333,7 @@ function showAddApplication() {
     formRow("公司 *", el("input", { class: "input", id: "na-company" })),
     formRow("岗位 *", el("input", { class: "input", id: "na-title" })),
     formRow("投递渠道", el("input", { class: "input", id: "na-channel", placeholder: "官网 / Boss直聘 / 内推" })),
+    formRow("投递时间", el("input", { class: "input", id: "na-applied", type: "datetime-local" })),
     formRow("备注", el("textarea", { class: "textarea", id: "na-notes" }))
   );
   showModal("新增投递", body, [
@@ -338,7 +342,9 @@ function showAddApplication() {
       if (!company || !title) { toast("请填写公司和岗位"); return; }
       await API.post("/api/applications", {
         company: company, title: title,
-        channel: val("na-channel") || null, notes: val("na-notes") || null
+        channel: val("na-channel") || null,
+        applied_at: val("na-applied") || null,
+        notes: val("na-notes") || null
       });
       toast("已添加"); closeModal(); loadApplications();
     } }, "添加"),

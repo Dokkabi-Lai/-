@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: autumn-application-tracker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: avatars
+      - key: FEISHU_APP_ID
+        sync: false
+      - key: FEISHU_APP_SECRET
+        sync: false
+      - key: FEISHU_SYNC_ENABLED
+        value: "true"
+      - key: FEISHU_SYNC_HOUR
+        value: "6"
+      - key: FEISHU_SYNC_MINUTE
+        value: "0"
+      - key: TZ
+        value: Asia/Shanghai

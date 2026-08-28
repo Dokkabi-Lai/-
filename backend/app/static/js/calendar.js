@@ -1,8 +1,12 @@
 var calYear, calMonth;
-var typeLabels = { "job_deadline": "岗位截止", "application_stage": "面试安排", "todo_deadline": "待投递" };
-var typeColors = { "job_deadline": "#ff3b30", "application_stage": "#007aff", "todo_deadline": "#ff9500" };
-var typeBgColors = { "job_deadline": "rgba(255,59,48,0.08)", "application_stage": "rgba(0,122,255,0.08)", "todo_deadline": "rgba(255,149,0,0.08)" };
-var _calVisibleTypes = { "job_deadline": true, "application_stage": true, "todo_deadline": true };
+var typeLabels = { exam: "笔试", interview: "面试", other: "其他安排" };
+var typeColors = { exam: "#0f766e", interview: "#2563eb", other: "#b45309" };
+var typeBgColors = {
+  exam: "rgba(15,118,110,0.12)",
+  interview: "rgba(37,99,235,0.12)",
+  other: "rgba(180,83,9,0.12)"
+};
+var _calVisibleTypes = { exam: true, interview: true, other: true };
 
 window.load_calendar = async function() {
   var now = new Date();
@@ -16,8 +20,8 @@ async function renderCalendarPage() {
   page.innerHTML = "";
   page.appendChild(el("div", { class: "page-header" },
     el("div", {},
-      el("h1", { class: "page-title" }, "日历视图"),
-      el("div", { class: "page-sub muted" }, "一览所有面试安排和截止日期")
+      el("h1", { class: "page-title" }, "日历"),
+      el("div", { class: "page-sub muted" }, "笔试与面试安排")
     ),
     el("div", { class: "cal-nav" },
       el("button", { class: "btn sm", onclick: function() { prevMonth(); } }, "‹"),
@@ -27,18 +31,14 @@ async function renderCalendarPage() {
     )
   ));
 
-  // 统计概览
   page.appendChild(el("div", { class: "cal-stats", id: "cal-stats" }));
-  // 类型筛选
   page.appendChild(el("div", { class: "cal-type-filters", id: "cal-type-filters" }));
-  // 日历
   page.appendChild(el("div", { class: "card" },
     el("div", { id: "cal-grid" }, el("div", { class: "loading" }, "加载中…"))
   ));
-  // 事件列表
   page.appendChild(el("div", { class: "card mt-16" },
     el("div", { class: "card-header" },
-      el("h3", { class: "card-title" }, "📋 本月事件")
+      el("h3", { class: "card-title" }, "本月安排")
     ),
     el("div", { id: "cal-events" }, el("div", { class: "loading" }, "加载中…"))
   ));
@@ -50,7 +50,6 @@ async function loadCalendarData() {
     var data = await API.get("/api/calendar/month?year=" + calYear + "&month=" + calMonth);
     renderCalGrid(data.events || []);
     renderEventList(data.events || []);
-    // 加载统计
     try {
       var stats = await API.get("/api/calendar/month/stats?year=" + calYear + "&month=" + calMonth);
       renderCalStats(stats);
@@ -64,8 +63,6 @@ function renderCalStats(stats) {
   var box = document.getElementById("cal-stats");
   if (!box) return;
   box.innerHTML = "";
-
-  // 总统计
   box.appendChild(el("div", { class: "cal-stats-grid" },
     el("div", { class: "cal-stat-card" },
       el("div", { class: "cal-stat-num" }, stats.total),
@@ -81,14 +78,11 @@ function renderCalStats(stats) {
     )
   ));
 
-  // 按类型统计 + 筛选
   var filterBox = document.getElementById("cal-type-filters");
   if (filterBox) {
     filterBox.innerHTML = "";
     filterBox.appendChild(el("div", { class: "cal-type-stats" },
       ...Object.keys(typeLabels).map(function(type) {
-        var count = 0;
-        // 从 stats.by_stage 估算，或从当前事件计算
         return el("label", { class: "chip-toggle " + (_calVisibleTypes[type] ? "active" : ""), onclick: function() { toggleCalType(type); } },
           el("span", { class: "cal-type-dot", style: "background:" + typeColors[type] }),
           el("span", {}, typeLabels[type])
@@ -100,7 +94,6 @@ function renderCalStats(stats) {
 
 function toggleCalType(type) {
   _calVisibleTypes[type] = !_calVisibleTypes[type];
-  // 重新渲染
   loadCalendarData();
 }
 
@@ -139,7 +132,7 @@ function renderCalGrid(events) {
         dayEvents.slice(0, 3).forEach(function(e) {
           var color = typeColors[e.type] || "#646a73";
           var bg = typeBgColors[e.type] || "var(--bg)";
-          var title = e.title.length > 6 ? e.title.slice(0, 6) + '…' : e.title;
+          var title = e.title.length > 8 ? e.title.slice(0, 8) + '…' : e.title;
           eventsHtml += '<div class="cal-event" style="border-left-color:' + color + ';background:' + bg + '" title="' + e.title + '">' + title + '</div>';
         });
         if (dayEvents.length > 3) eventsHtml += '<div class="cal-more">+' + (dayEvents.length - 3) + '</div>';
@@ -161,18 +154,13 @@ function renderCalGrid(events) {
 function renderEventList(events) {
   var box = document.getElementById("cal-events");
   var visibleEvents = events.filter(function(e) { return _calVisibleTypes[e.type] !== false; });
-  if (!visibleEvents.length) { box.innerHTML = ""; box.appendChild(emptyState("本月暂无事件")); return; }
-  // 按日期+时间排序
+  if (!visibleEvents.length) { box.innerHTML = ""; box.appendChild(emptyState("本月暂无笔试或面试安排")); return; }
   visibleEvents.sort(function(a, b) {
     var cmp = a.date.localeCompare(b.date);
     if (cmp !== 0) return cmp;
-    // 同一天内按时间排序
-    var ta = a.time || "";
-    var tb = b.time || "";
-    return ta.localeCompare(tb);
+    return (a.time || "").localeCompare(b.time || "");
   });
   box.innerHTML = "";
-  // 按日期分组
   var currentDate = "";
   visibleEvents.forEach(function(e) {
     var color = typeColors[e.type] || "#646a73";
@@ -183,11 +171,10 @@ function renderEventList(events) {
     var infoContent = el("div", { class: "event-info" },
       el("div", { class: "event-title" }, e.title),
       el("div", { class: "event-meta" },
-        el("span", { class: "chip sm", style: "color:" + color }, typeLabels[e.type] || e.type),
-        e.time ? el("span", { class: "text-sm" }, "🕐 " + e.time) : null,
-        e.location ? el("span", { class: "text-sm" }, "📍 " + e.location) : null,
-        e.form ? el("span", { class: "text-sm" }, "📋 " + e.form) : null,
-        e.url ? el("a", { href: e.url, target: "_blank", class: "text-sm link", onclick: function(ev) { ev.stopPropagation(); } }, "🔗 链接") : null
+        el("span", { class: "chip sm", style: "color:" + color }, typeLabels[e.type] || e.stage || e.type),
+        e.time ? el("span", { class: "text-sm" }, e.time) : null,
+        e.location ? el("span", { class: "text-sm" }, e.location) : null,
+        e.form ? el("span", { class: "text-sm" }, e.form) : null
       )
     );
     box.appendChild(el("div", { class: "event-item" },

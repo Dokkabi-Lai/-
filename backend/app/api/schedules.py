@@ -6,16 +6,23 @@ import datetime as dt
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from ..models import Application, ApplicationStage, get_db
+from ..models import Application, ApplicationStage, User, get_db
+from .deps import get_current_user
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
 
 
 @router.get("")
-def list_schedules(upcoming: bool = True, limit: int = 100, db: Session = Depends(get_db)):
+def list_schedules(
+    upcoming: bool = True,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """从投递阶段中获取有安排时间的日程。"""
     query = db.query(ApplicationStage).join(Application).filter(
-        ApplicationStage.scheduled_at.isnot(None)
+        Application.user_id == user.id,
+        ApplicationStage.scheduled_at.isnot(None),
     )
     if upcoming:
         query = query.filter(ApplicationStage.scheduled_at >= dt.datetime.now())

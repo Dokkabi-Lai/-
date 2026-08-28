@@ -3,6 +3,12 @@ backend/config.yaml
 backend/data/
 backend/logs/
 backend/venv/
+.env
+.env.*
+koyeb
+koyeb.tar.gz
+*.xlsx
+!backend/config.yaml.example
 __pycache__/
 *.pyc
 .DS_Store

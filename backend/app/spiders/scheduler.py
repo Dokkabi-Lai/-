@@ -8,7 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models import Job, get_sessionmaker
+from ..models import Group, Job, get_sessionmaker
 from .base import BaseSpider, SpiderResult, log_spider
 from .nowcoder import NowcoderSpider
 from .smawiki import SmaWikiSpider
@@ -125,24 +125,12 @@ _scheduler: Optional[BackgroundScheduler] = None
 
 
 def start_scheduler():
-    """启动定时任务（爬虫 + 每日推送）。"""
+    """启动定时任务（每日推送与飞书岗位同步）。"""
     global _scheduler
     if _scheduler is not None:
         return
-    settings = get_settings()
     _scheduler = BackgroundScheduler()
 
-    # 定时爬虫
-    if settings.spider.enabled:
-        _scheduler.add_job(
-            run_all_spiders,
-            "cron",
-            hour=settings.spider.cron_hour,
-            minute=settings.spider.cron_minute,
-            id="spider_cron",
-        )
-
-    # 每日推送（早上 8:00）
     _scheduler.add_job(
         _daily_push,
         "cron",
@@ -150,6 +138,16 @@ def start_scheduler():
         minute=0,
         id="daily_push",
     )
+    feishu = get_settings().jobs.feishu
+    if feishu.sync_enabled and feishu.app_id and feishu.app_secret:
+        _scheduler.add_job(
+            _sync_feishu_groups,
+            "cron",
+            hour=feishu.sync_hour,
+            minute=feishu.sync_minute,
+            id="feishu_jobs_sync",
+            replace_existing=True,
+        )
 
     _scheduler.start()
 
@@ -161,6 +159,28 @@ def _daily_push():
         push_daily_notification()
     except Exception:
         pass  # 推送失败不影响主服务
+
+
+def _sync_feishu_groups():
+    """依次更新所有已启用飞书同步的群组。"""
+    db = get_sessionmaker()()
+    try:
+        from ..services.feishu_service import sync_jobs_from_feishu
+        group_ids = [
+            row[0] for row in db.query(Group.id).filter(
+                Group.feishu_sync_enabled.is_(True),
+                Group.feishu_spreadsheet_token.isnot(None),
+            ).all()
+        ]
+        for group_id in group_ids:
+            try:
+                sync_jobs_from_feishu(db=db, group_id=group_id)
+            except Exception:
+                db.rollback()
+    except Exception:
+        pass  # 同步状态由 feishu_service 记录
+    finally:
+        db.close()
 
 
 def stop_scheduler():

@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from ..models import Application, ApplicationStage, User, get_db
-from .deps import get_current_user
+from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from .deps import get_current_group, get_current_user
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
@@ -59,22 +59,39 @@ def _serialize_app(a: Application) -> dict:
 
 # POST /api/applications - 创建投递记录
 @router.post("")
-def create_application(body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def create_application(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
     """创建投递记录，自动生成所有 7 个阶段。"""
     company = body.get("company", "").strip()
     title = body.get("title", "").strip()
     if not company or not title:
         raise HTTPException(400, "company 和 title 不能为空")
+    job_id = body.get("job_id")
+    if job_id and not db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first():
+        raise HTTPException(404, "当前群组中没有这个岗位")
+
+    notes = body.get("notes")
+    applied_at = None
+    if body.get("applied_at"):
+        try:
+            applied_at = dt.datetime.fromisoformat(str(body["applied_at"]).replace("Z", ""))
+        except ValueError:
+            raise HTTPException(400, "投递时间格式不正确")
 
     app = Application(
         user_id=user.id,
-        job_id=body.get("job_id"),
+        job_id=job_id,
         company=company,
         title=title,
         channel=body.get("channel"),
-        notes=body.get("notes"),
+        notes=notes,
         status="已投递",
         current_stage="投递",
+        applied_at=applied_at or dt.datetime.now(),
     )
     db.add(app)
     db.flush()  # 获取 app.id
@@ -145,6 +162,78 @@ def list_all_reviews(db: Session = Depends(get_db), user: User = Depends(get_cur
     return list(result.values())
 
 
+@router.get("/dashboard")
+def application_dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """投递仪表盘：漏斗与阶段分布。"""
+    apps = db.query(Application).filter(Application.user_id == user.id).all()
+    by_stage = {s: 0 for s in STAGES}
+    by_status = {"进行中": 0, "已淘汰": 0, "已完成": 0}
+    for a in apps:
+        if a.status == "已淘汰":
+            by_status["已淘汰"] += 1
+        elif a.status == "已完成":
+            by_status["已完成"] += 1
+        else:
+            by_status["进行中"] += 1
+        if a.current_stage in by_stage:
+            by_stage[a.current_stage] += 1
+
+    def _reached(stage: str) -> int:
+        idx = STAGES.index(stage)
+        n = 0
+        for a in apps:
+            cur = STAGES.index(a.current_stage) if a.current_stage in STAGES else 0
+            if a.status == "已完成":
+                n += 1
+            elif cur >= idx:
+                n += 1
+        return n
+
+    return {
+        "total": len(apps),
+        "by_status": by_status,
+        "by_stage": by_stage,
+        "funnel": {
+            "投递": _reached("投递"),
+            "简历筛选": _reached("简历筛选"),
+            "笔试": _reached("笔试"),
+            "面试": _reached("一面"),
+            "Offer": by_status["已完成"],
+        },
+        "reject_by_stage": _reject_by_stage(apps),
+        "weekly": _weekly_counts(apps),
+    }
+
+
+def _reject_by_stage(apps: list[Application]) -> dict:
+    out: dict[str, int] = {}
+    for a in apps:
+        if a.status != "已淘汰":
+            continue
+        key = a.rejected_stage or "未知"
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def _weekly_counts(apps: list[Application]) -> list[dict]:
+    today = dt.date.today()
+    start_monday = today - dt.timedelta(days=today.weekday())
+    weeks = []
+    for i in range(7, -1, -1):
+        week_start = start_monday - dt.timedelta(days=i * 7)
+        week_end = week_start + dt.timedelta(days=7)
+        count = 0
+        for a in apps:
+            if not a.applied_at:
+                continue
+            d = a.applied_at.date()
+            if week_start <= d < week_end:
+                count += 1
+        label = f"{week_start.month}/{week_start.day}"
+        weeks.append({"week": week_start.isoformat(), "label": label, "count": count})
+    return weeks
+
+
 # GET /api/applications/{id} - 获取单条投递详情
 @router.get("/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -162,9 +251,19 @@ def update_application(app_id: int, body: dict, db: Session = Depends(get_db), u
     app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
-    for field in ("company", "title", "channel", "notes"):
-        if field in body and body[field] is not None:
-            setattr(app, field, body[field])
+    for field in ("company", "title", "channel", "notes", "applied_at"):
+        if field not in body:
+            continue
+        val = body[field]
+        if field == "applied_at":
+            if not val:
+                continue
+            try:
+                app.applied_at = dt.datetime.fromisoformat(str(val).replace("Z", ""))
+            except ValueError:
+                raise HTTPException(400, "投递时间格式不正确")
+        elif val is not None:
+            setattr(app, field, val)
     db.commit()
     db.refresh(app)
     return _serialize_app(app)

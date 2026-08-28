@@ -1,5 +1,7 @@
 # WLB大作战 - 部署指南
 
+> 推荐使用新的 [Render + Supabase 部署指南](DEPLOY_RENDER.md)。下面的 Koyeb、Railway 与本地服务器内容仅作备选，免费额度可能随平台政策变化。
+
 ## 方式零：Koyeb 免费部署（国内可访问，无需信用卡）
 
 Koyeb 提供永久免费实例（1个 Web 服务 + 1GB PostgreSQL 数据库），国内可直接访问。

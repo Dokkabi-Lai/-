@@ -58,9 +58,8 @@ class OpenAICompatibleLLM(BaseLLM):
         json_mode: bool = False,
     ) -> str:
         if not self.api_key:
-            raise LLMError(
-                f"未配置 {self.name} 的 api_key，请在 backend/config.yaml 中填写。"
-            )
+            # 允许无 API Key 时返回占位符，应用仍可运行
+            return "AI 功能暂未配置（请在设置中填写 API Key）"
         url = f"{self.base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model,
