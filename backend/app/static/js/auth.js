@@ -9,9 +9,9 @@ function initAuth() {
     try {
       currentUser = JSON.parse(saved);
       if (currentUser && currentUser.token) {
+        showApp();
         API.get("/api/auth/me").then(function(data) {
           saveCurrentUser(data);
-          showApp();
         }).catch(function() {
           localStorage.removeItem("user");
           currentUser = null;

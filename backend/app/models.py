@@ -328,12 +328,12 @@ def get_engine():
             db_path = BASE_DIR / settings.db.path
             db_path.parent.mkdir(parents=True, exist_ok=True)
             db_url = f"sqlite:///{db_path}"
-        _engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
-            echo=False,
-            pool_pre_ping=True,
-        )
+        engine_kwargs = {"echo": False, "pool_pre_ping": True}
+        if "sqlite" in db_url:
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs.update(pool_size=3, max_overflow=2, pool_recycle=280)
+        _engine = create_engine(db_url, **engine_kwargs)
     return _engine
 
 
