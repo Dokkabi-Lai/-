@@ -25,15 +25,6 @@ async function renderCalendarPage() {
       el("div", { class: "section-kicker" }, "TIMEBOX"),
       el("h1", { class: "calendar-title" }, "日历"),
       el("p", {}, "把固定时间和截止时间放进同一条清晰的节奏里。")
-    ),
-    el("div", { class: "calendar-hero-side" },
-      el("span", { class: "calendar-hero-label" }, "当前查看"),
-      el("div", { class: "cal-nav" },
-        el("button", { class: "btn sm calendar-nav-btn", "aria-label": "上个月", onclick: function() { prevMonth(); } }, "‹"),
-        el("span", { class: "cal-month-label", id: "cal-label" }, calYear + "年" + calMonth + "月"),
-        el("button", { class: "btn sm calendar-nav-btn", "aria-label": "下个月", onclick: function() { nextMonth(); } }, "›"),
-        el("button", { class: "btn sm calendar-today-btn", onclick: function() { goToday(); } }, "回到今天")
-      )
     )
   ));
 
@@ -59,7 +50,15 @@ async function renderCalendarPage() {
         el("div", { class: "section-kicker" }, "MONTH VIEW"),
         el("h2", {}, "月视图")
       ),
-      el("span", { class: "cal-card-hint" }, "日程会按颜色区分")
+      el("div", { class: "cal-month-head-actions" },
+        el("div", { class: "cal-nav cal-month-nav", "aria-label": "月份切换" },
+          el("button", { class: "btn sm calendar-nav-btn", "aria-label": "上个月", onclick: function() { prevMonth(); } }, "‹"),
+          el("span", { class: "cal-month-label", id: "cal-label" }, calYear + "年" + calMonth + "月"),
+          el("button", { class: "btn sm calendar-nav-btn", "aria-label": "下个月", onclick: function() { nextMonth(); } }, "›"),
+          el("button", { class: "btn sm calendar-today-btn", onclick: function() { goToday(); } }, "今天")
+        ),
+        el("span", { class: "cal-card-hint" }, "日程会按颜色区分")
+      )
     ),
     el("div", { id: "cal-grid" }, el("div", { class: "loading" }, "加载中…"))
   ));
@@ -237,19 +236,24 @@ function _weekdayName(dateStr) {
 function prevMonth() {
   calMonth--;
   if (calMonth < 1) { calMonth = 12; calYear--; }
-  document.getElementById("cal-label").textContent = calYear + "年" + calMonth + "月";
+  updateCalLabel();
   loadCalendarData();
 }
 function nextMonth() {
   calMonth++;
   if (calMonth > 12) { calMonth = 1; calYear++; }
-  document.getElementById("cal-label").textContent = calYear + "年" + calMonth + "月";
+  updateCalLabel();
   loadCalendarData();
 }
 function goToday() {
   var now = new Date();
   calYear = now.getFullYear();
   calMonth = now.getMonth() + 1;
-  document.getElementById("cal-label").textContent = calYear + "年" + calMonth + "月";
+  updateCalLabel();
   loadCalendarData();
+}
+
+function updateCalLabel() {
+  var label = document.getElementById("cal-label");
+  if (label) label.textContent = calYear + "年" + calMonth + "月";
 }
