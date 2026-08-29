@@ -286,6 +286,35 @@ _engine = None
 _SessionLocal = None
 
 
+def get_db_backend() -> str:
+    """返回当前数据库类型：postgresql 或 sqlite。"""
+    settings = get_settings()
+    if settings.db.url:
+        return "postgresql"
+    return "sqlite"
+
+
+def validate_database_config() -> None:
+    """云端部署必须配置 DATABASE_URL，否则每次重启都会丢失用户数据。"""
+    import logging
+    import os
+
+    settings = get_settings()
+    if settings.db.url:
+        return
+    if os.environ.get("ALLOW_SQLITE", "").lower() in ("1", "true", "yes"):
+        logging.getLogger(__name__).warning(
+            "ALLOW_SQLITE is enabled; user data is stored in ephemeral SQLite."
+        )
+        return
+    if str(BASE_DIR) == "/app" or os.environ.get("SUPABASE_URL"):
+        raise RuntimeError(
+            "DATABASE_URL is not set. Without Supabase PostgreSQL, the app falls back to "
+            "container SQLite and all registered users are lost on every redeploy. "
+            "Add DATABASE_URL (Session pooler + ?sslmode=require) in SnapDeploy env vars."
+        )
+
+
 def get_engine():
     global _engine
     if _engine is None:

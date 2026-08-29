@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import BASE_DIR, get_settings
-from .models import init_db
+from .models import init_db, get_db_backend, validate_database_config
 from .services.excel_import_service import import_jobs_from_config
 
 from .api import applications, auth, calendar, groups, home, jobs, schedules
@@ -22,6 +22,7 @@ STATIC_DIR = BASE_DIR / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_database_config()
     init_db()
     import_jobs_from_config()
     yield
@@ -55,11 +56,19 @@ async def index():
 
 @app.get("/api/health")
 def health():
-    from .models import Job, get_sessionmaker
+    from .models import Job, User, get_sessionmaker
 
     db = get_sessionmaker()()
     try:
         job_count = db.query(Job).count()
+        user_count = db.query(User).count()
     finally:
         db.close()
-    return {"status": "ok", "job_count": job_count}
+    backend = get_db_backend()
+    return {
+        "status": "ok",
+        "job_count": job_count,
+        "user_count": user_count,
+        "database": backend,
+        "persistent": backend == "postgresql",
+    }
