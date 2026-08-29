@@ -51,7 +51,9 @@ function renderFunnel(items) {
   var max = Math.max.apply(null, items.map(function(i) { return i.value; }).concat([1]));
   var wrap = el("div", { class: "funnel-visual" });
   items.forEach(function(item) {
-    var pct = Math.max(28, Math.round(item.value / max * 100));
+    // 数值为 0 时保持空 bar，避免用固定最小宽度把不存在的漏斗阶段
+    // 视觉上误显示成有数据；很小的非零值才保留一点可见宽度。
+    var pct = item.value ? Math.max(12, Math.round(item.value / max * 100)) : 0;
     wrap.appendChild(el("div", { class: "funnel-row" },
       el("div", { class: "funnel-label-col" }, item.label),
       el("div", { class: "funnel-bar-col" },

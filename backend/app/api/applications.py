@@ -41,7 +41,68 @@ def _serialize_stage(s: ApplicationStage) -> dict:
     }
 
 
-def _serialize_app(a: Application, stages: list[ApplicationStage] | None = None) -> dict:
+def _effective_current_stage(
+    app: Application,
+    stages: list[ApplicationStage] | None = None,
+) -> str | None:
+    """从阶段记录推导真正正在进行的环节。
+
+    ``Application.current_stage`` 是旧版本的缓存字段，历史数据可能没有及时
+    更新。阶段记录才是事实来源：优先取 current，其次取最后一个已完成阶段
+    后面的第一个未跳过阶段。
+    """
+    if app.status == "已完成":
+        return "Offer"
+    stage_rows = app.stages if stages is None else stages
+    stage_map = {s.stage: s for s in (stage_rows or [])}
+    if app.status == "已淘汰":
+        return app.rejected_stage or app.current_stage
+
+    for name in STAGES:
+        stage = stage_map.get(name)
+        if stage and stage.status == "current":
+            return name
+
+    last_completed_idx = -1
+    for idx, name in enumerate(STAGES):
+        stage = stage_map.get(name)
+        if stage and stage.status == "completed":
+            last_completed_idx = idx
+    for idx in range(last_completed_idx + 1, len(STAGES)):
+        stage = stage_map.get(STAGES[idx])
+        if not stage or stage.status != "skipped":
+            return STAGES[idx]
+    if app.current_stage in STAGES:
+        return app.current_stage
+    return STAGES[0] if stage_rows else None
+
+
+def _reached_stage_index(
+    app: Application,
+    stages: list[ApplicationStage] | None = None,
+) -> int:
+    """返回投递记录实际到达过的最高阶段索引，用于漏斗统计。"""
+    if app.status == "已完成":
+        return len(STAGES) - 1
+    stage_rows = app.stages if stages is None else stages
+    stage_map = {s.stage: s for s in (stage_rows or [])}
+    reached = [
+        idx for idx, name in enumerate(STAGES)
+        if (stage := stage_map.get(name))
+        and stage.status in ("completed", "current")
+    ]
+    if app.status == "已淘汰" and app.rejected_stage in STAGES:
+        reached.append(STAGES.index(app.rejected_stage))
+    if reached:
+        return max(reached)
+    return STAGES.index(app.current_stage) if app.current_stage in STAGES else -1
+
+
+def _serialize_app(
+    a: Application,
+    stages: list[ApplicationStage] | None = None,
+    job_url: str | None = None,
+) -> dict:
     # 按 STAGES 顺序排列阶段
     stage_rows = a.stages if stages is None else stages
     stage_map = {s.stage: s for s in (stage_rows or [])}
@@ -51,6 +112,11 @@ def _serialize_app(a: Application, stages: list[ApplicationStage] | None = None)
     for s in (stage_rows or []):
         if s.stage not in known:
             ordered_stages.append(_serialize_stage(s))
+    if job_url is None:
+        # 列表和单条查询会预加载 job；不要因为历史数据没有岗位关联而额外
+        # 触发一次隐式查询。
+        job = a.__dict__.get("job")
+        job_url = job.url if job else None
     return {
         "id": a.id,
         "user_id": a.user_id,
@@ -61,7 +127,8 @@ def _serialize_app(a: Application, stages: list[ApplicationStage] | None = None)
         "resume_id": a.resume_id,
         "status": a.status,
         "rejected_stage": a.rejected_stage,
-        "current_stage": a.current_stage,
+        "current_stage": _effective_current_stage(a, stage_rows),
+        "job_url": job_url,
         "applied_at": a.applied_at.isoformat() if a.applied_at else None,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
         "notes": a.notes,
@@ -83,8 +150,27 @@ def create_application(
     if not company or not title:
         raise HTTPException(400, "company 和 title 不能为空")
     job_id = body.get("job_id")
-    if job_id and not db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first():
-        raise HTTPException(404, "当前群组中没有这个岗位")
+    job = None
+    if job_id:
+        job = db.query(Job).filter(Job.id == job_id, Job.group_id == group.id).first()
+        if not job:
+            raise HTTPException(404, "当前群组中没有这个岗位")
+    else:
+        # 从「新增投递」手动录入时也尝试按当前岗位库的公司和岗位精确匹配，
+        # 这样不经过岗位卡片创建的记录同样能带出真实投递链接。
+        job = db.query(Job).filter(
+            Job.group_id == group.id,
+            Job.company == company,
+            Job.title == title,
+            Job.url.isnot(None),
+            Job.url != "",
+        ).order_by(
+            desc(Job.is_active),
+            desc(Job.updated_at),
+            desc(Job.id),
+        ).first()
+        if job:
+            job_id = job.id
 
     notes = body.get("notes")
     applied_at = None
@@ -123,19 +209,26 @@ def create_application(
     db.add_all(stages)
 
     db.commit()
-    return _serialize_app(app, stages)
+    return _serialize_app(app, stages, job.url if job else None)
 
 
 # GET /api/applications - 获取所有投递记录
 @router.get("")
 def list_applications(status: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有投递记录，每条记录带上所有阶段信息。"""
-    q = db.query(Application).options(selectinload(Application.stages)).filter(
+    q = db.query(Application).options(
+        selectinload(Application.stages),
+        selectinload(Application.job),
+    ).filter(
         Application.user_id == user.id
     )
     if status:
         q = q.filter(Application.status == status)
-    rows = q.order_by(desc(Application.updated_at)).all()
+    rows = q.order_by(
+        desc(Application.applied_at).nullslast(),
+        desc(Application.updated_at),
+        desc(Application.id),
+    ).all()
     return [_serialize_app(a) for a in rows]
 
 
@@ -143,9 +236,16 @@ def list_applications(status: Optional[str] = None, db: Session = Depends(get_db
 @router.get("/offers/list")
 def list_offers(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有已拿到 Offer 的投递记录"""
-    apps = db.query(Application).options(selectinload(Application.stages)).filter(
+    apps = db.query(Application).options(
+        selectinload(Application.stages),
+        selectinload(Application.job),
+    ).filter(
         Application.status == "已完成", Application.user_id == user.id
-    ).order_by(desc(Application.updated_at)).all()
+    ).order_by(
+        desc(Application.applied_at).nullslast(),
+        desc(Application.updated_at),
+        desc(Application.id),
+    ).all()
     return [_serialize_app(a) for a in apps]
 
 
@@ -186,7 +286,9 @@ def list_all_reviews(db: Session = Depends(get_db), user: User = Depends(get_cur
 @router.get("/dashboard")
 def application_dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """投递仪表盘：漏斗与阶段分布。"""
-    apps = db.query(Application).filter(Application.user_id == user.id).all()
+    apps = db.query(Application).options(selectinload(Application.stages)).filter(
+        Application.user_id == user.id
+    ).all()
     by_stage = {s: 0 for s in STAGES}
     by_status = {"进行中": 0, "已淘汰": 0, "已完成": 0}
     for a in apps:
@@ -196,19 +298,14 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
             by_status["已完成"] += 1
         else:
             by_status["进行中"] += 1
-        if a.current_stage in by_stage:
-            by_stage[a.current_stage] += 1
+        if a.status not in ("已淘汰", "已完成"):
+            current = _effective_current_stage(a, a.stages)
+            if current in by_stage:
+                by_stage[current] += 1
 
     def _reached(stage: str) -> int:
         idx = STAGES.index(stage)
-        n = 0
-        for a in apps:
-            cur = STAGES.index(a.current_stage) if a.current_stage in STAGES else 0
-            if a.status == "已完成":
-                n += 1
-            elif cur >= idx:
-                n += 1
-        return n
+        return sum(1 for a in apps if _reached_stage_index(a, a.stages) >= idx)
 
     return {
         "total": len(apps),
@@ -259,7 +356,10 @@ def _weekly_counts(apps: list[Application]) -> list[dict]:
 @router.get("/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取单条投递详情，包含所有阶段。"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -271,7 +371,10 @@ def get_application(app_id: int, db: Session = Depends(get_db), user: User = Dep
 @router.patch("/{app_id}")
 def update_application(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新投递记录基本信息。"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -309,7 +412,10 @@ def delete_application(app_id: int, db: Session = Depends(get_db), user: User = 
 @router.patch("/{app_id}/stage/{stage_name}")
 def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新某个阶段的信息。"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -351,6 +457,11 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
 
     if "status" in body:
         stage.status = body["status"]
+        if stage.status == "current":
+            # 一个投递同时只保留一个真实的进行中阶段。
+            for other in app.stages or []:
+                if other is not stage and other.status == "current":
+                    other.status = "pending"
         # 当 status 改为 completed 时自动设 completed_at
         if body["status"] == "completed" and not stage.completed_at:
             stage.completed_at = dt.datetime.now()
@@ -365,12 +476,17 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
 @router.post("/{app_id}/advance")
 def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """推进到下一阶段：将当前阶段标记为 completed，下一个阶段设为 current。"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
 
+    # 兼容旧数据：如果缓存字段没有跟着阶段记录更新，先以真实阶段状态为准。
+    _sync_current_stage(app, db)
     stage_map = {s.stage: s for s in (app.stages or [])}
 
     # 找到当前阶段在 STAGES 中的索引
@@ -413,8 +529,15 @@ def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depen
 
 
 def _sync_current_stage(app: Application, db: Session):
-    """根据阶段完成情况，更新 Application.current_stage。"""
+    """根据实际阶段状态更新 Application.current_stage 缓存。"""
     stage_map = {s.stage: s for s in (app.stages or [])}
+    current_stage = next(
+        (name for name in STAGES if stage_map.get(name) and stage_map[name].status == "current"),
+        None,
+    )
+    if current_stage:
+        app.current_stage = current_stage
+        return
     last_completed = None
     for name in STAGES:
         s = stage_map.get(name)
@@ -435,7 +558,10 @@ def _sync_current_stage(app: Application, db: Session):
 @router.post("/{app_id}/rollback")
 def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """回退到指定阶段：将该阶段及后续阶段全部重置为 pending。"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -464,7 +590,7 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
                 prev.completed_at = dt.datetime.now()
 
     # 更新 current_stage
-    app.current_stage = target_stage
+    _sync_current_stage(app, db)
     # 如果之前是淘汰状态，恢复
     if app.status == "已淘汰":
         app.status = "进行中"
@@ -477,11 +603,16 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
 @router.post("/{app_id}/reject")
 def reject_application(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """标记投递为已淘汰"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
+    if "stage" not in body:
+        _sync_current_stage(app, db)
     app.status = "已淘汰"
     app.rejected_stage = body.get("stage", app.current_stage)
     # 将被淘汰的阶段标记为 skipped
@@ -495,7 +626,10 @@ def reject_application(app_id: int, body: dict, db: Session = Depends(get_db), u
 @router.post("/{app_id}/restore")
 def restore_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """恢复已淘汰的投递"""
-    app = db.query(Application).options(joinedload(Application.stages)).filter(
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -507,5 +641,6 @@ def restore_application(app_id: int, db: Session = Depends(get_db), user: User =
         stage = next((item for item in (app.stages or []) if item.stage == old_stage), None)
         if stage:
             stage.status = "pending"
+        _sync_current_stage(app, db)
     db.commit()
     return _serialize_app(app)

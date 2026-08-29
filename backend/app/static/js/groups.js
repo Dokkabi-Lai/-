@@ -21,11 +21,14 @@ function renderGroupSwitcher() {
   ];
   targets.forEach(function(target) {
     if (!target || !groupState.active) return;
+    var activeLabel = groupState.active.is_system
+      ? "共享岗位库"
+      : groupState.active.member_count > 1 ? "协作岗位库" : "个人岗位库";
     target.innerHTML = "";
     target.appendChild(el("button", { class: "group-switch-button", onclick: openGroupHub },
       el("span", { class: "group-mark" }, groupState.active.name.charAt(0)),
       el("span", { class: "group-switch-copy" },
-        el("small", {}, "当前协作空间"),
+        el("small", {}, activeLabel),
         el("strong", {}, groupState.active.name)
       ),
       el("span", { class: "group-chevron" }, "⌄")
@@ -254,4 +257,3 @@ function openMobileMore() {
   );
   showModal("更多", content, [el("button", { class: "btn", onclick: closeModal }, "关闭")]);
 }
-

@@ -4,15 +4,16 @@ import unittest
 
 import jwt
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import joinedload, selectinload, sessionmaker
 
 from app.api.auth import _SALT, hash_password, verify_password
 from app.api.deps import create_access_token
 from app.api.home import _deadline_notifications
+from app.api.applications import _serialize_app, application_dashboard
 from app.config import get_settings
-from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, User
+from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, User, _ensure_default_group
 from app.services.excel_import_service import _upsert_jobs, import_job_items
-from app.services.group_service import active_membership, ensure_user_default_group
+from app.services.group_service import active_membership, ensure_user_default_group, ensure_user_personal_group
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -146,6 +147,138 @@ class GroupMembershipTests(unittest.TestCase):
         self.assertIsNotNone(membership)
         self.assertEqual(membership.role, "owner")
         self.assertEqual(user.active_group_id, group.id)
+
+    def test_existing_shared_group_is_not_filled_with_new_users(self):
+        owner = User(username="old-owner", email="old-owner@example.com", password_hash="x")
+        new_user = User(username="later-user", email="later@example.com", password_hash="x")
+        self.db.add_all([owner, new_user])
+        self.db.flush()
+        shared = Group(
+            name="原有秋招群",
+            description="原有群组说明",
+            owner_id=owner.id,
+            is_system=True,
+        )
+        self.db.add(shared)
+        self.db.flush()
+        self.db.add(GroupMember(group_id=shared.id, user_id=owner.id, role="owner"))
+        self.db.commit()
+
+        _ensure_default_group(self.db.get_bind())
+
+        members = self.db.query(GroupMember).filter(GroupMember.group_id == shared.id).all()
+        self.assertEqual([member.user_id for member in members], [owner.id])
+        self.assertEqual(shared.name, "原有秋招群")
+        self.assertEqual(shared.description, "原有群组说明")
+        self.assertIsNone(new_user.active_group_id)
+
+        personal = ensure_user_personal_group(self.db, new_user)
+        self.db.commit()
+        self.assertFalse(personal.is_system)
+        self.assertEqual(personal.name, "我的岗位库")
+        self.assertEqual(new_user.active_group_id, personal.id)
+        self.assertIsNotNone(active_membership(self.db, new_user.id, personal.id))
+
+
+class ApplicationAnalyticsTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    def _add_stages(self, app, statuses):
+        self.db.add_all([
+            ApplicationStage(application_id=app.id, stage=stage, status=status)
+            for stage, status in zip(
+                ("投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"),
+                statuses,
+            )
+        ])
+
+    def test_dashboard_uses_actual_stage_records(self):
+        user = User(username="analytics-user", email="analytics@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+
+        screening = Application(
+            user_id=user.id,
+            company="筛选公司",
+            title="分析岗",
+            status="进行中",
+            current_stage="投递",  # 故意保留旧缓存值
+        )
+        written = Application(
+            user_id=user.id,
+            company="笔试公司",
+            title="产品岗",
+            status="进行中",
+            current_stage="简历筛选",
+        )
+        rejected = Application(
+            user_id=user.id,
+            company="淘汰公司",
+            title="运营岗",
+            status="已淘汰",
+            current_stage="投递",
+            rejected_stage="简历筛选",
+        )
+        offer = Application(
+            user_id=user.id,
+            company="Offer公司",
+            title="开发岗",
+            status="已完成",
+            current_stage="HR面",
+        )
+        self.db.add_all([screening, written, rejected, offer])
+        self.db.flush()
+        self._add_stages(screening, ["completed", "current", "pending", "pending", "pending", "pending", "pending"])
+        self._add_stages(written, ["completed", "completed", "current", "pending", "pending", "pending", "pending"])
+        self._add_stages(rejected, ["completed", "skipped", "pending", "pending", "pending", "pending", "pending"])
+        self._add_stages(offer, ["completed", "completed", "completed", "completed", "completed", "completed", "completed"])
+        self.db.commit()
+
+        stats = application_dashboard(self.db, user)
+
+        self.assertEqual(stats["by_status"], {"进行中": 2, "已淘汰": 1, "已完成": 1})
+        self.assertEqual(stats["by_stage"]["简历筛选"], 1)
+        self.assertEqual(stats["by_stage"]["笔试"], 1)
+        self.assertEqual(stats["funnel"], {"投递": 4, "简历筛选": 4, "笔试": 2, "面试": 1, "Offer": 1})
+
+    def test_application_serializes_job_library_url(self):
+        user = User(username="link-user", email="link@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        job = Job(
+            source="manual",
+            source_id="link-job",
+            company="链接公司",
+            title="数据岗",
+            url="https://jobs.example.com/link-job",
+        )
+        self.db.add(job)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            job_id=job.id,
+            company=job.company,
+            title=job.title,
+        )
+        self.db.add(app)
+        self.db.flush()
+        stages = [ApplicationStage(application_id=app.id, stage="投递", status="completed")]
+        self.db.add_all(stages)
+        self.db.commit()
+        row = self.db.query(Application).options(
+            joinedload(Application.job),
+            selectinload(Application.stages),
+        ).filter(Application.id == app.id).one()
+
+        payload = _serialize_app(row)
+
+        self.assertEqual(payload["job_url"], "https://jobs.example.com/link-job")
 
 
 if __name__ == "__main__":

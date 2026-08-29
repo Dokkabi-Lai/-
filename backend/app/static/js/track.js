@@ -24,9 +24,7 @@ window.load_track = async function() {
     el("div", { class: "filter-tabs scroll-tabs", id: "track-tabs" },
       el("button", { class: "tab-btn" + (_trackFilter === "all" ? " active" : ""), "data-filter": "all", onclick: function() { setTrackFilter("all"); } }, "全部"),
       el("button", { class: "tab-btn" + (_trackFilter === "active" ? " active" : ""), "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
-      el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer"),
-      el("button", { class: "tab-btn" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
-      el("button", { class: "tab-btn" + (_trackFilter === "completed" ? " active" : ""), "data-filter": "completed", onclick: function() { setTrackFilter("completed"); } }, "已完成")
+      el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer")
     ),
     el("div", { class: "track-search" },
       el("span", { class: "track-search-icon", "aria-hidden": "true" }, "⌕"),
@@ -62,7 +60,7 @@ async function loadApplications() {
   var box = document.getElementById("track-list");
   if (!box) return;
   try {
-    _trackApplications = await API.get("/api/applications");
+    _trackApplications = sortTrackApplications(await API.get("/api/applications"));
     renderTrackApplications(_trackApplications);
   } catch(e) {
     box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
@@ -82,6 +80,7 @@ function syncTrackApplication(updated) {
   });
   if (index >= 0) _trackApplications[index] = updated;
   else _trackApplications.unshift(updated);
+  sortTrackApplications(_trackApplications);
   window._trackFocusId = updated.id;
   renderTrackApplications(_trackApplications);
   markApplicationViewsStale();
@@ -104,10 +103,23 @@ function markApplicationViewsStale() {
   });
 }
 
+function trackTimeValue(value) {
+  var time = value ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sortTrackApplications(items) {
+  return (items || []).sort(function(a, b) {
+    return trackTimeValue(b.applied_at) - trackTimeValue(a.applied_at)
+      || trackTimeValue(b.updated_at) - trackTimeValue(a.updated_at)
+      || Number(b.id || 0) - Number(a.id || 0);
+  });
+}
+
 function renderTrackApplications(allData) {
   var box = document.getElementById("track-list");
   if (!box) return;
-  var data = (allData || []).slice();
+  var data = sortTrackApplications((allData || []).slice());
     if (_trackFilter === "active") data = data.filter(function(a) { return a.status !== "已淘汰" && a.status !== "已完成"; });
     if (_trackFilter === "rejected") data = data.filter(function(a) { return a.status === "已淘汰"; });
     if (_trackFilter === "completed") data = data.filter(function(a) { return a.status === "已完成"; });
@@ -162,8 +174,18 @@ function renderTrackPager(data, renderer) {
   var pager = el("section", { class: "track-pager" });
   var identity = el("div", { class: "track-pager-identity" });
   var counter = el("span", { class: "track-pager-counter" });
-  var cardWrap = el("div", { class: "track-pager-card" });
-  var dots = el("div", { class: "track-pager-dots", "aria-label": "岗位分页" });
+  var cardWrap = el("div", { class: "track-pager-card track-pager-swipe-surface", "aria-live": "polite" });
+  var slider = el("input", {
+    class: "track-pager-slider", type: "range", min: "0", max: String(Math.max(0, _trackPagerData.length - 1)),
+    value: String(_trackPagerIndex), step: "1", "aria-label": "滑动选择岗位",
+    oninput: function(event) {
+      var target = Number(event.target.value);
+      var direction = target > _trackPagerIndex ? "next" : target < _trackPagerIndex ? "prev" : "";
+      _trackPagerIndex = target;
+      paint(direction);
+    }
+  });
+  slider.disabled = _trackPagerData.length <= 1;
   var prev = el("button", { class: "btn sm track-pager-btn", type: "button", "aria-label": "上一个岗位", onclick: function() { move(-1); } }, "← 上一个");
   var next = el("button", { class: "btn sm primary track-pager-btn", type: "button", "aria-label": "下一个岗位", onclick: function() { move(1); } }, "下一个 →");
 
@@ -177,9 +199,47 @@ function renderTrackPager(data, renderer) {
   pager.appendChild(cardWrap);
   pager.appendChild(el("div", { class: "track-pager-foot" },
     prev,
-    dots,
+    el("div", { class: "track-pager-slider-wrap" },
+      el("span", { class: "track-pager-slider-hint" }, "左右滑动查看"),
+      slider
+    ),
     next
   ));
+
+  var swipeStartX = 0;
+  var swipeStartY = 0;
+  var swipeActive = false;
+  var suppressClickUntil = 0;
+  cardWrap.addEventListener("pointerdown", function(event) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (event.target && event.target.closest && event.target.closest("button,a,input,textarea,select")) return;
+    swipeStartX = event.clientX;
+    swipeStartY = event.clientY;
+    swipeActive = true;
+    cardWrap.classList.add("is-dragging");
+    if (cardWrap.setPointerCapture) cardWrap.setPointerCapture(event.pointerId);
+  });
+  cardWrap.addEventListener("pointerup", function(event) {
+    if (!swipeActive) return;
+    var dx = event.clientX - swipeStartX;
+    var dy = event.clientY - swipeStartY;
+    swipeActive = false;
+    cardWrap.classList.remove("is-dragging");
+    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      suppressClickUntil = Date.now() + 350;
+      move(dx < 0 ? 1 : -1);
+    }
+  });
+  cardWrap.addEventListener("pointercancel", function() {
+    swipeActive = false;
+    cardWrap.classList.remove("is-dragging");
+  });
+  cardWrap.addEventListener("click", function(event) {
+    if (Date.now() < suppressClickUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
 
   function move(step) {
     var target = _trackPagerIndex + step;
@@ -193,6 +253,12 @@ function renderTrackPager(data, renderer) {
     if (!app) return;
     identity.textContent = (app.company || "未命名公司") + " · " + (app.title || "未命名岗位");
     counter.textContent = "第 " + (_trackPagerIndex + 1) + " / " + _trackPagerData.length + " 个岗位";
+    slider.value = String(_trackPagerIndex);
+    slider.style.setProperty(
+      "--pager-progress",
+      (_trackPagerData.length <= 1 ? 100 : _trackPagerIndex / (_trackPagerData.length - 1) * 100) + "%"
+    );
+    slider.setAttribute("aria-valuetext", "第 " + (_trackPagerIndex + 1) + " / " + _trackPagerData.length + " 个岗位");
     prev.disabled = _trackPagerIndex === 0;
     next.disabled = _trackPagerIndex === _trackPagerData.length - 1;
     cardWrap.innerHTML = "";
@@ -204,24 +270,9 @@ function renderTrackPager(data, renderer) {
       cardWrap.classList.add(direction === "next" ? "pager-swap-next" : "pager-swap-prev");
     }
 
-    dots.innerHTML = "";
-    var maxDots = 7;
-    var start = Math.max(0, Math.min(_trackPagerIndex - 3, _trackPagerData.length - maxDots));
-    var end = Math.min(_trackPagerData.length, start + maxDots);
-    if (start > 0) dots.appendChild(el("span", { class: "track-pager-ellipsis" }, "···"));
-    for (var i = start; i < end; i++) {
-      dots.appendChild(el("button", {
-        class: "track-pager-dot" + (i === _trackPagerIndex ? " active" : ""),
-        type: "button",
-        title: (_trackPagerData[i].company || "岗位") + " · " + (_trackPagerData[i].title || ""),
-        "aria-label": "第 " + (i + 1) + " 个岗位",
-        onclick: function(index) { return function() { _trackPagerIndex = index; paint(); }; }(i)
-      }, String(i + 1)));
-    }
-    if (end < _trackPagerData.length) dots.appendChild(el("span", { class: "track-pager-ellipsis" }, "···"));
   }
 
-  // 点击页码时不需要区分滑动方向，重新绘制即可。
+  // 支持按钮、拖动滑块和手机左右手势三种切换方式。
   paint();
   return pager;
 }
@@ -230,10 +281,12 @@ function appCard(app) {
   var stages = app.stages || [];
   var isRejected = app.status === "已淘汰";
   var currentIdx = -1;
+  var explicitCurrentIdx = -1;
   stages.forEach(function(s, i) {
     if (s.status === "completed") currentIdx = i;
+    if (s.status === "current") explicitCurrentIdx = i;
   });
-  var nextIdx = currentIdx + 1;
+  var nextIdx = explicitCurrentIdx >= 0 ? explicitCurrentIdx : currentIdx + 1;
   var nextStage = nextIdx < STAGES.length ? STAGES[nextIdx] : null;
 
   var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : ""), "data-app-id": app.id });
@@ -248,6 +301,7 @@ function appCard(app) {
         el("div", { class: "pipeline-meta" },
           app.channel ? el("span", { class: "chip sm" }, app.channel) : null,
           el("span", { class: "text-sm muted", style: "cursor:pointer", title: "点击修改投递时间", onclick: function(e) { e.stopPropagation(); editApplication(app); } }, "投递于 " + (app.applied_at || "").slice(0, 10)),
+          app.job_url ? el("a", { class: "pipeline-job-link", href: app.job_url, target: "_blank", rel: "noopener noreferrer", onclick: function(e) { e.stopPropagation(); } }, "岗位链接 ↗") : null,
           isRejected ? el("span", { class: "chip sm rejected-chip" }, "❌ " + (app.rejected_stage || "") + "淘汰") : null
         )
       )
@@ -265,7 +319,7 @@ function appCard(app) {
     var statusClass = "";
     if (isRejected && stageName === app.rejected_stage) statusClass = "rejected";
     else if (stageData.status === "completed") statusClass = "completed";
-    else if (idx === nextIdx && !isRejected) statusClass = "current";
+    else if ((stageData.status === "current" || idx === nextIdx) && !isRejected) statusClass = "current";
     else if (stageData.status === "skipped") statusClass = "skipped";
 
     var statusText = "";

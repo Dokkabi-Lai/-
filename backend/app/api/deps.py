@@ -11,7 +11,7 @@ from ..config import get_settings
 from ..models import Group, GroupMember, User, get_db
 from ..services.group_service import (
     active_membership,
-    ensure_user_default_group,
+    ensure_user_personal_group,
     first_membership,
     is_platform_admin,
 )
@@ -73,7 +73,7 @@ def get_current_group(
     if not membership:
         membership = first_membership(db, user.id)
     if not membership:
-        group = ensure_user_default_group(db, user)
+        group = ensure_user_personal_group(db, user)
         db.commit()
         return group
     group = db.get(Group, membership.group_id)

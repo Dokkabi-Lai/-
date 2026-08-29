@@ -70,16 +70,37 @@ function renderHome(data) {
     shell.appendChild(renderGroupActivity(data.job_activity_today));
   }
 
+  var activeSection = renderActiveAppSection(data.in_progress_apps);
+  var activeCollapsed = false;
+  try { activeCollapsed = window.localStorage.getItem("homeActiveCollapsed") === "1"; } catch (_) {}
+  activeSection.classList.toggle("is-collapsed", activeCollapsed);
+  var activeToggle = el("button", {
+    class: "btn ghost sm home-collapse-toggle",
+    type: "button",
+    "aria-expanded": String(!activeCollapsed),
+    "aria-controls": "home-active-section",
+    onclick: function() {
+      activeCollapsed = !activeCollapsed;
+      activeSection.classList.toggle("is-collapsed", activeCollapsed);
+      activeToggle.setAttribute("aria-expanded", String(!activeCollapsed));
+      activeToggle.textContent = activeCollapsed ? "展开" : "收起";
+      try { window.localStorage.setItem("homeActiveCollapsed", activeCollapsed ? "1" : "0"); } catch (_) {}
+    }
+  }, activeCollapsed ? "展开" : "收起");
+
   shell.appendChild(el("div", { class: "home-section-head home-section-head-spaced" },
     el("div", {},
       el("div", { class: "section-kicker" }, "KEEP MOVING"),
       el("h2", { class: "section-title" }, "继续推进"),
       el("p", { class: "section-sub muted" }, "每一次状态更新，都会让下一步更清晰")
     ),
-    el("button", { class: "btn ghost sm", onclick: function() { showPage("track"); } }, "查看全部 →")
+    el("div", { class: "home-section-actions" },
+      activeToggle,
+      el("button", { class: "btn ghost sm", onclick: function() { showPage("track"); } }, "查看全部 →")
+    )
   ));
 
-  shell.appendChild(renderActiveAppSection(data.in_progress_apps));
+  shell.appendChild(activeSection);
 
   shell.appendChild(el("div", { class: "home-section-head home-section-head-spaced", id: "home-dashboard" },
     el("div", {},
@@ -224,7 +245,7 @@ function renderGroupActivity(activity) {
 
 function renderActiveAppSection(apps) {
   var empty = !apps || !apps.length;
-  var card = el("section", { class: "card section-card app-section-card app-section-accent home-active-section" },
+  var card = el("section", { class: "card section-card app-section-card app-section-accent home-active-section", id: "home-active-section" },
     el("div", { class: "card-header" },
       el("div", {},
         el("div", { class: "section-kicker" }, "IN MOTION"),

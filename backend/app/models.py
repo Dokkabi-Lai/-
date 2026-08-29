@@ -217,6 +217,7 @@ class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (
         Index("ix_applications_user_updated", "user_id", "updated_at"),
+        Index("ix_applications_user_applied", "user_id", "applied_at"),
         Index("ix_applications_user_status", "user_id", "status"),
     )
 
@@ -237,6 +238,8 @@ class Application(Base):
 
     # relationships
     user: Mapped[Optional["User"]] = relationship("User", back_populates="applications")
+    # 只读关联：投递记录保留岗位快照字段，同时可以拿到岗位库里的真实链接。
+    job: Mapped[Optional["Job"]] = relationship("Job", foreign_keys=[job_id], viewonly=True)
     stages: Mapped[list["ApplicationStage"]] = relationship(
         "ApplicationStage", backref="application", cascade="all, delete-orphan"
     )
@@ -442,6 +445,8 @@ def _ensure_query_indexes(engine) -> None:
         "ON jobs (group_id, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_applications_user_updated "
         "ON applications (user_id, updated_at)",
+        "CREATE INDEX IF NOT EXISTS ix_applications_user_applied "
+        "ON applications (user_id, applied_at)",
         "CREATE INDEX IF NOT EXISTS ix_applications_user_status "
         "ON applications (user_id, status)",
         "CREATE INDEX IF NOT EXISTS ix_application_stages_application "
@@ -457,7 +462,12 @@ def _ensure_query_indexes(engine) -> None:
 
 
 def _ensure_default_group(engine) -> None:
-    """把升级前的全局岗位和用户安全迁入默认群组。"""
+    """只做一次升级兼容，不把后续新用户加入旧的共享群组。
+
+    旧版本没有个人岗位库，首次升级时需要把旧的无归属岗位放进系统群组。
+    如果系统群组已经存在，则完整保留它现有的成员和信息；新用户会在注册或
+    第一次访问时由 ``ensure_user_personal_group`` 创建自己的岗位库。
+    """
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = Session()
     try:
@@ -468,22 +478,15 @@ def _ensure_default_group(engine) -> None:
             group = Group(name="默认岗位群", description="升级前的共享岗位库", owner_id=owner.id if owner else None, is_system=True)
             db.add(group)
             db.flush()
-        elif not group.owner_id and users:
-            owner = next((u for u in users if u.is_admin), users[0])
-            group.owner_id = owner.id
-
-        existing_user_ids = {
-            row[0] for row in db.query(GroupMember.user_id).filter(GroupMember.group_id == group.id).all()
-        }
-        for user in users:
-            if user.id not in existing_user_ids:
+            # 只有真正创建旧系统群时，才把升级前已有用户迁入其中。
+            for user in users:
                 db.add(GroupMember(
                     group_id=group.id,
                     user_id=user.id,
                     role="owner" if user.id == group.owner_id else "member",
                 ))
-            if not user.active_group_id:
-                user.active_group_id = group.id
+                if not user.active_group_id:
+                    user.active_group_id = group.id
         db.query(Job).filter(Job.group_id.is_(None)).update(
             {Job.group_id: group.id}, synchronize_session=False
         )

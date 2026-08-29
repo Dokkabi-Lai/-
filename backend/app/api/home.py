@@ -151,7 +151,11 @@ def home_feed(
     # 投递记录一次取出后在内存中分组，避免首页为同一用户重复发起 5 次统计查询。
     user_apps = db.query(Application).filter(
         Application.user_id == user.id,
-    ).order_by(desc(Application.updated_at)).all()
+    ).order_by(
+        desc(Application.applied_at).nullslast(),
+        desc(Application.updated_at),
+        desc(Application.id),
+    ).all()
     in_progress_apps = [
         a for a in user_apps if a.status not in ("已淘汰", "已完成")
     ][:12]

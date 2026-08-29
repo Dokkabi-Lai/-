@@ -2035,7 +2035,11 @@ button { font: inherit; }
 }
 
 /* === 2026 第二轮：岗位翻页与日历重设计 === */
-.home-active-section { width: 100%; }
+.home-active-section { width: 100%; transition: box-shadow var(--transition), background var(--transition); }
+.home-active-section.is-collapsed .app-scroll,
+.home-active-section.is-collapsed .empty-mini { display: none; }
+.home-active-section.is-collapsed .card-header { margin-bottom: 0; }
+.home-section-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .home-active-section .app-scroll {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2057,6 +2061,11 @@ button { font: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .track-pager-card { min-width: 0; }
+.track-pager-swipe-surface {
+  touch-action: pan-y; cursor: grab; user-select: none;
+  transition: box-shadow var(--transition), transform var(--transition);
+}
+.track-pager-swipe-surface.is-dragging { cursor: grabbing; }
 .track-pager-card > .pipeline-card,
 .track-pager-card > .offer-card { margin-bottom: 0; }
 .track-pager-card > .pipeline-card { border-radius: 24px; box-shadow: 0 14px 34px rgba(54,38,25,.07); }
@@ -2067,18 +2076,37 @@ button { font: inherit; }
 }
 .track-pager-btn { min-width: 96px; }
 .track-pager-btn:disabled { opacity: .36; cursor: not-allowed; transform: none; }
-.track-pager-dots {
-  min-width: 0; flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
-  overflow: hidden;
+.track-pager-slider-wrap {
+  min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px;
 }
-.track-pager-dot {
-  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: var(--text-tertiary); font-size: 11px; cursor: pointer;
-  transition: all var(--transition);
+.track-pager-slider-hint {
+  flex-shrink: 0; color: var(--text-tertiary); font-size: 11px; white-space: nowrap;
 }
-.track-pager-dot:hover { background: var(--bg-secondary); color: var(--text); }
-.track-pager-dot.active { background: var(--blue); color: #fff; box-shadow: 0 4px 10px rgba(189,96,60,.2); }
-.track-pager-ellipsis { color: var(--text-quaternary); font-size: 13px; letter-spacing: 1px; }
+.track-pager-slider {
+  --pager-progress: 0%;
+  width: 100%; height: 22px; margin: 0; appearance: none; -webkit-appearance: none;
+  background: transparent; cursor: pointer;
+}
+.track-pager-slider::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 999px;
+  background: linear-gradient(to right, var(--blue) var(--pager-progress), var(--bg-secondary) var(--pager-progress));
+}
+.track-pager-slider::-moz-range-track {
+  height: 5px; border-radius: 999px; background: var(--bg-secondary);
+}
+.track-pager-slider::-moz-range-progress { height: 5px; border-radius: 999px; background: var(--blue); }
+.track-pager-slider::-webkit-slider-thumb {
+  width: 17px; height: 17px; margin-top: -6px; border: 3px solid var(--card-solid);
+  border-radius: 50%; background: var(--blue); box-shadow: 0 2px 8px rgba(189,96,60,.3);
+  appearance: none; -webkit-appearance: none;
+}
+.track-pager-slider::-moz-range-thumb {
+  width: 12px; height: 12px; border: 3px solid var(--card-solid);
+  border-radius: 50%; background: var(--blue); box-shadow: 0 2px 8px rgba(189,96,60,.3);
+}
+.track-pager-slider:disabled { opacity: .4; cursor: default; }
+.pipeline-job-link { color: var(--blue); font-size: 11px; font-weight: 700; text-decoration: none; }
+.pipeline-job-link:hover { text-decoration: underline; }
 .pager-swap-next { animation: pager-swap-next .24s ease both; }
 .pager-swap-prev { animation: pager-swap-prev .24s ease both; }
 @keyframes pager-swap-next {
@@ -2178,11 +2206,12 @@ button { font: inherit; }
 
 @media (max-width: 768px) {
   .home-active-section .app-scroll { grid-template-columns: 1fr; }
+  .home-section-actions { align-items: flex-end; flex-direction: column; gap: 4px; }
   .track-pager-head { align-items: flex-start; gap: 10px; }
   .track-pager-identity { font-size: 14px; }
   .track-pager-foot { flex-wrap: wrap; gap: 8px; }
   .track-pager-btn { flex: 1; min-width: 0; }
-  .track-pager-dots { order: 3; flex-basis: 100%; width: 100%; }
+  .track-pager-slider-wrap { order: 3; flex-basis: 100%; width: 100%; }
 
   .calendar-hero { min-height: 0; align-items: stretch; flex-direction: column; gap: 22px; padding: 23px 19px 20px; border-radius: 24px; }
   .calendar-hero::after { width: 210px; height: 210px; right: -72px; top: -98px; }

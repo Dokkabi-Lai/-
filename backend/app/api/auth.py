@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..models import User, get_db
 from ..services.avatar_service import save_avatar
-from ..services.group_service import ensure_user_default_group
+from ..services.group_service import ensure_user_personal_group
 from .deps import create_access_token, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -103,7 +103,7 @@ def register(body: dict, db: Session = Depends(get_db)):
     )
     db.add(user)
     db.flush()
-    ensure_user_default_group(db, user)
+    ensure_user_personal_group(db, user)
     db.commit()
     db.refresh(user)
     return _user_payload(user, include_token=True)
