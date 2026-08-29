@@ -9,6 +9,7 @@ from sqlalchemy import and_, desc, func
 from sqlalchemy.orm import Session
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from .applications import build_dashboard
 from .deps import get_current_group, get_current_user
 
 router = APIRouter(prefix="/api/home", tags=["home"])
@@ -35,7 +36,6 @@ def home_feed(
         ),
     ).order_by(ApplicationStage.scheduled_at).all()
 
-    today_start = dt.datetime.combine(today, dt.time.min)
     job_day_start = (
         dt.datetime.combine(today, dt.time.min, tzinfo=ZoneInfo("Asia/Shanghai"))
         .astimezone(dt.timezone.utc)
@@ -54,41 +54,29 @@ def home_feed(
         Job.created_at >= job_day_start,
     ).group_by(User.id).order_by(func.count(Job.id).desc()).all()
 
-    in_progress_apps = db.query(Application).filter(
-        Application.user_id == user.id,
-        Application.status.notin_(["已淘汰", "已完成"]),
-    ).order_by(desc(Application.updated_at)).limit(12).all()
-
-    rejected_apps = db.query(Application).filter(
-        Application.user_id == user.id,
-        Application.status == "已淘汰",
-    ).order_by(desc(Application.updated_at)).limit(12).all()
+    apps = db.query(Application).filter(Application.user_id == user.id).order_by(
+        desc(Application.updated_at)
+    ).all()
+    in_progress_apps = [a for a in apps if a.status not in ("已淘汰", "已完成")][:12]
+    rejected_apps = [a for a in apps if a.status == "已淘汰"][:12]
+    dashboard = build_dashboard(apps)
+    by_status = dashboard["by_status"]
 
     total_jobs = db.query(Job).filter(
         Job.group_id == group.id, Job.is_active.is_not(False)
-    ).count()
-    total_apps = db.query(Application).filter(Application.user_id == user.id).count()
-    offer_count = db.query(Application).filter(
-        Application.status == "已完成", Application.user_id == user.id
-    ).count()
-    rejected_count = db.query(Application).filter(
-        Application.status == "已淘汰", Application.user_id == user.id
-    ).count()
-    in_progress_count = db.query(Application).filter(
-        Application.status.notin_(["已淘汰", "已完成"]),
-        Application.user_id == user.id,
     ).count()
 
     return {
         "stats": {
             "total_jobs": total_jobs,
-            "total_apps": total_apps,
+            "total_apps": dashboard["total"],
             "schedule_count": len(today_stages),
-            "offer_count": offer_count,
-            "rejected_count": rejected_count,
-            "in_progress_count": in_progress_count,
+            "offer_count": by_status["已完成"],
+            "rejected_count": by_status["已淘汰"],
+            "in_progress_count": by_status["进行中"],
             "new_today_count": new_today_count,
         },
+        "dashboard": dashboard,
         "group": {"id": group.id, "name": group.name},
         "job_activity_today": {
             "total": new_today_count,

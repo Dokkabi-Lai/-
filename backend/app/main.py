@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -22,13 +23,28 @@ STATIC_DIR = BASE_DIR / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    validate_database_config()
-    init_db()
-    import_jobs_from_config()
+    try:
+        validate_database_config()
+        init_db()
+        import_jobs_from_config()
+    except Exception as exc:
+        print(f"[startup] FAILED: {exc}", flush=True)
+        raise
+    print(f"[startup] OK database={get_db_backend()}", flush=True)
     yield
 
 
 app = FastAPI(title="秋招投递助手", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+@app.middleware("http")
+async def cache_static_assets(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "public, max-age=604800"
+    return response
+
 
 app.include_router(auth.router)
 app.include_router(groups.router)
@@ -56,19 +72,9 @@ async def index():
 
 @app.get("/api/health")
 def health():
-    from .models import Job, User, get_sessionmaker
-
-    db = get_sessionmaker()()
-    try:
-        job_count = db.query(Job).count()
-        user_count = db.query(User).count()
-    finally:
-        db.close()
     backend = get_db_backend()
     return {
         "status": "ok",
-        "job_count": job_count,
-        "user_count": user_count,
         "database": backend,
         "persistent": backend == "postgresql",
     }

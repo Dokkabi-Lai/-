@@ -43,8 +43,10 @@ window.load_home = async function() {
     page.appendChild(el("div", { id: "dash-funnel" }, el("div", { class: "loading" }, "加载图表…")));
     page.appendChild(el("div", { id: "review-list" }));
 
-    if (typeof loadDashboard === "function") loadDashboard();
-    if (typeof loadReviews === "function") loadReviews();
+    if (typeof loadDashboard === "function") loadDashboard(data.dashboard);
+    if (typeof loadReviews === "function") {
+      setTimeout(loadReviews, 0);
+    }
   } catch(e) {
     page.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }

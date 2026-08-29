@@ -5,6 +5,7 @@ import datetime as dt
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Group, GroupInvite, GroupMember, User, get_db
@@ -35,9 +36,21 @@ def list_groups(db: Session = Depends(get_db), user: User = Depends(get_current_
         GroupMember.user_id == user.id,
         GroupMember.status == "active",
     ).order_by(Group.is_system.desc(), GroupMember.joined_at).all()
+    group_ids = [group.id for _, group in rows]
+    counts = {}
+    if group_ids:
+        counts = dict(
+            db.query(GroupMember.group_id, func.count(GroupMember.id))
+            .filter(GroupMember.group_id.in_(group_ids), GroupMember.status == "active")
+            .group_by(GroupMember.group_id)
+            .all()
+        )
     return {
         "active_group_id": user.active_group_id,
-        "items": [group_payload(db, group, user) for _, group in rows],
+        "items": [
+            group_payload(db, group, user, member=member, member_count=counts.get(group.id, 0))
+            for member, group in rows
+        ],
     }
 
 
