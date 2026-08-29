@@ -76,12 +76,6 @@ def update_group(
         group.name = name[:100]
     if "description" in body:
         group.description = str(body.get("description") or "").strip()[:500] or None
-    if "feishu_spreadsheet_token" in body:
-        group.feishu_spreadsheet_token = str(body.get("feishu_spreadsheet_token") or "").strip()[:500] or None
-    if "feishu_sheet_id" in body:
-        group.feishu_sheet_id = str(body.get("feishu_sheet_id") or "").strip()[:100] or None
-    if "feishu_sync_enabled" in body:
-        group.feishu_sync_enabled = bool(body.get("feishu_sync_enabled"))
     db.commit()
     db.refresh(group)
     return group_payload(db, group, user)

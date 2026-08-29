@@ -71,7 +71,5 @@ def group_payload(db: Session, group: Group, user: User) -> dict:
         "member_count": count,
         "is_system": group.is_system,
         "is_owner": bool(platform_admin or (member and member.role == "owner")),
-        "feishu_configured": bool(group.feishu_spreadsheet_token),
-        "feishu_sync_enabled": group.feishu_sync_enabled,
     }
 

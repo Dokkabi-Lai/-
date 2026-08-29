@@ -33,7 +33,7 @@ class AuthenticationTests(unittest.TestCase):
             jwt.decode(token[:-2] + "xx", settings.app.jwt_secret, algorithms=["HS256"])
 
 
-class FeishuUpsertTests(unittest.TestCase):
+class JobUpsertTests(unittest.TestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
@@ -44,8 +44,8 @@ class FeishuUpsertTests(unittest.TestCase):
 
     def test_second_snapshot_updates_and_deactivates_missing_jobs(self):
         first = [
-            {"source": "feishu", "source_id": "a", "company": "A", "title": "分析", "location": "上海"},
-            {"source": "feishu", "source_id": "b", "company": "B", "title": "产品", "location": "杭州"},
+            {"source": "excel", "source_id": "a", "company": "A", "title": "分析", "location": "上海"},
+            {"source": "excel", "source_id": "b", "company": "B", "title": "产品", "location": "杭州"},
         ]
         result = _upsert_jobs(self.db, first, deactivate_missing=True)
         self.assertEqual(result["created"], 2)

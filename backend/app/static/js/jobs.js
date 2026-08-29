@@ -14,36 +14,18 @@ window.load_jobs = async function() {
     actions.appendChild(el("button", { class: "btn", onclick: function() { pickExcelFile(); } }, "上传 Excel"));
     actions.appendChild(el("button", { class: "btn", onclick: function() { reloadExcel(); } }, "重新导入"));
   }
-  if (status.can_sync && status.feishu_configured) {
-    actions.insertBefore(
-      el("button", { class: "btn", onclick: function() { syncFeishu(); } }, "从飞书同步"),
-      actions.children[1] || null
-    );
-  }
 
   page.appendChild(el("div", { class: "page-header" },
     el("div", {},
       el("h1", { class: "page-title" }, "岗位库"),
       el("div", { class: "page-sub muted" },
-        status.feishu && status.feishu.synced_at
-          ? "飞书最近同步：" + status.feishu.synced_at.replace("T", " ").slice(0, 16)
-          : status.uploaded_at
+        status.uploaded_at
           ? "最近上传：" + status.uploaded_at.replace("T", " ").slice(0, 16)
-          : status.can_manage ? "连接飞书或上传 Excel，建立共享岗位库" : "岗位由管理员从飞书持续更新"
+          : status.can_manage ? "上传 Excel 或表格录入，建立共享岗位库" : "岗位由群主和管理员维护"
       )
     ),
     actions
   ));
-
-  if (status.feishu) {
-    page.appendChild(el("div", { class: "sync-status " + status.feishu.status },
-      el("span", { class: "sync-dot" }),
-      el("strong", {}, status.feishu.status === "success" ? "飞书已连接" : "飞书同步异常"),
-      el("span", {}, status.feishu.status === "success"
-        ? "新增 " + status.feishu.created + " · 更新 " + status.feishu.updated + " · 下架 " + status.feishu.deactivated
-        : (status.feishu.message || "请检查飞书应用权限"))
-    ));
-  }
 
   var batchSelect = el("select", { class: "input filter-input sm", id: "f-batch", onchange: function() { loadJobs(); } },
     el("option", { value: "" }, "全部批次")
@@ -392,15 +374,6 @@ async function uploadExcelFile(file) {
     toast("导入完成：新增 " + r.created + "，更新 " + r.updated);
     load_jobs();
   } catch(e) { toast("导入失败: " + parseApiError(e)); }
-}
-
-async function syncFeishu() {
-  toast("正在从飞书同步…");
-  try {
-    var r = await API.post("/api/jobs/import/feishu");
-    toast("同步完成：新增 " + r.created + "，更新 " + r.updated);
-    load_jobs();
-  } catch(e) { toast("同步失败: " + parseApiError(e)); }
 }
 
 function parseApiError(e) {

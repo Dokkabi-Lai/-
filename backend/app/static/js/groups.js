@@ -59,7 +59,6 @@ function openGroupHub() {
     content.appendChild(el("div", { class: "group-hub-actions" },
       el("button", { class: "btn", onclick: showGroupMembers }, "查看成员"),
       groupState.active.is_owner ? el("button", { class: "btn", onclick: createInviteLink }, "邀请成员") : null,
-      groupState.active.is_owner ? el("button", { class: "btn", onclick: openFeishuBinding }, "飞书设置") : null,
       !groupState.active.is_owner && !groupState.active.is_system
         ? el("button", { class: "btn danger", onclick: leaveCurrentGroup }, "退出群组")
         : null
@@ -168,36 +167,6 @@ async function removeGroupMember(userId) {
   toast("成员已移出", "success");
   showGroupMembers();
   initGroups();
-}
-
-function openFeishuBinding() {
-  var content = el("div", {},
-    formRow("飞书表格链接", el("input", { class: "input", id: "group-feishu-url", value: "", placeholder: "https://xxx.feishu.cn/sheets/..." })),
-    formRow("工作表 ID（可选）", el("input", { class: "input", id: "group-feishu-sheet", placeholder: "留空读取第一个工作表" })),
-    el("label", { class: "chip-toggle" },
-      el("input", { type: "checkbox", id: "group-feishu-auto", checked: groupState.active.feishu_sync_enabled ? true : null }),
-      el("span", {}, "开启每日自动同步")
-    ),
-    el("p", { class: "form-help" }, "飞书 App ID 和 Secret 由网站管理员在部署环境中统一配置。")
-  );
-  showModal("绑定飞书岗位表", content, [
-    el("button", { class: "btn primary", onclick: saveFeishuBinding }, "保存"),
-    el("button", { class: "btn", onclick: openGroupHub }, "返回")
-  ]);
-}
-
-async function saveFeishuBinding() {
-  try {
-    var body = { feishu_sync_enabled: document.getElementById("group-feishu-auto").checked };
-    if (val("group-feishu-url")) body.feishu_spreadsheet_token = val("group-feishu-url");
-    if (val("group-feishu-sheet")) body.feishu_sheet_id = val("group-feishu-sheet");
-    await API.patch("/api/groups/" + groupState.active.id, body);
-    await initGroups();
-    closeModal();
-    toast("飞书设置已保存", "success");
-  } catch (e) {
-    toast("保存失败：" + parseGroupError(e), "error");
-  }
 }
 
 async function leaveCurrentGroup() {

@@ -19,15 +19,5 @@ services:
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: avatars
-      - key: FEISHU_APP_ID
-        sync: false
-      - key: FEISHU_APP_SECRET
-        sync: false
-      - key: FEISHU_SYNC_ENABLED
-        value: "true"
-      - key: FEISHU_SYNC_HOUR
-        value: "6"
-      - key: FEISHU_SYNC_MINUTE
-        value: "0"
       - key: TZ
         value: Asia/Shanghai

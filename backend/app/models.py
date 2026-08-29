@@ -67,9 +67,6 @@ class Group(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
-    feishu_spreadsheet_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    feishu_sheet_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    feishu_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 

@@ -53,12 +53,6 @@ def home_feed(
         Job.is_active.is_not(False),
         Job.created_at >= job_day_start,
     ).group_by(User.id).order_by(func.count(Job.id).desc()).all()
-    sync_count = db.query(Job).filter(
-        Job.group_id == group.id,
-        Job.is_active.is_not(False),
-        Job.created_by_id.is_(None),
-        Job.created_at >= job_day_start,
-    ).count()
 
     in_progress_apps = db.query(Application).filter(
         Application.user_id == user.id,
@@ -98,7 +92,6 @@ def home_feed(
         "group": {"id": group.id, "name": group.name},
         "job_activity_today": {
             "total": new_today_count,
-            "sync_count": sync_count,
             "contributors": [{
                 "user_id": contributor.id,
                 "nickname": contributor.nickname or contributor.email,

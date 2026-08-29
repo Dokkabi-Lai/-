@@ -13,9 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from .config import BASE_DIR, get_settings
 from .models import init_db
 from .services.excel_import_service import import_jobs_from_config
-from .spiders.scheduler import start_scheduler, stop_scheduler
 
-from .api import applications, auth, calendar, groups, home, jobs, notify, schedules
+from .api import applications, auth, calendar, groups, home, jobs, schedules
 
 
 STATIC_DIR = BASE_DIR / "app" / "static"
@@ -24,12 +23,8 @@ STATIC_DIR = BASE_DIR / "app" / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    feishu = get_settings().jobs.feishu
-    if not (feishu.app_id and feishu.app_secret and feishu.spreadsheet_token):
-        import_jobs_from_config()
-    start_scheduler()
+    import_jobs_from_config()
     yield
-    stop_scheduler()
 
 
 app = FastAPI(title="秋招投递助手", lifespan=lifespan)
@@ -40,7 +35,6 @@ app.include_router(jobs.router)
 app.include_router(applications.router)
 app.include_router(calendar.router)
 app.include_router(schedules.router)
-app.include_router(notify.router)
 app.include_router(home.router)
 
 if STATIC_DIR.exists():

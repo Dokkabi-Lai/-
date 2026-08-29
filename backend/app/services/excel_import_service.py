@@ -13,7 +13,7 @@ import openpyxl
 from sqlalchemy.orm import Session
 
 from ..config import BASE_DIR, get_settings
-from ..models import Group, Job, SyncState, get_sessionmaker
+from ..models import Group, Job, get_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -257,19 +257,7 @@ def _find_existing(db: Session, it: dict) -> Optional[Job]:
         if by_url:
             return by_url
     found = q.filter(Job.location == it.get("location"), Job.batch == it.get("batch")).first()
-    if found:
-        return found
-    if source == "feishu":
-        # 首次接入飞书时接管同一条 Excel 岗位，避免共享岗位库重复。
-        return db.query(Job).filter(
-            Job.source == "excel",
-            Job.group_id == group_id,
-            Job.company == it["company"],
-            Job.title == it["title"],
-            Job.location == it.get("location"),
-            Job.batch == it.get("batch"),
-        ).first()
-    return None
+    return found if found else None
 
 
 def _upsert_jobs(db: Session, items: list[dict], deactivate_missing: bool = False) -> dict:
@@ -327,7 +315,7 @@ def import_job_items(
     if own_session:
         db = get_sessionmaker()()
     try:
-        source = source_label if source_label in {"excel", "feishu", "manual"} else "excel"
+        source = source_label if source_label in {"excel", "manual"} else "excel"
         normalized = []
         for item in items:
             source_id = item["source_id"]
@@ -406,38 +394,10 @@ def import_jobs_from_config() -> dict:
 
 
 def import_status(db: Optional[Session] = None, group_id: Optional[int] = None) -> dict:
-    settings = get_settings()
     latest = latest_upload_path(group_id)
     configured = _resolve_excel_path(group_id)
-    feishu = settings.jobs.feishu
-    own_session = db is None
-    if own_session:
-        db = get_sessionmaker()()
-    group = db.get(Group, group_id) if group_id else None
-    state_key = f"feishu:{group_id}" if group_id else "feishu"
-    state = db.query(SyncState).filter(SyncState.source == state_key).first()
-    result = {
+    return {
         "excel_path": str(configured) if configured.exists() else "",
         "has_upload": latest.exists(),
         "uploaded_at": dt.datetime.fromtimestamp(latest.stat().st_mtime).isoformat() if latest.exists() else None,
-        "feishu_configured": bool(
-            feishu.app_id and feishu.app_secret and
-            (
-                (group and group.feishu_spreadsheet_token)
-                or (group and group.is_system and feishu.spreadsheet_token)
-                or (not group and feishu.spreadsheet_token)
-            )
-        ),
-        "feishu_sync_enabled": bool(group.feishu_sync_enabled if group else feishu.sync_enabled),
-        "feishu": {
-            "status": state.status,
-            "created": state.created_count,
-            "updated": state.updated_count,
-            "deactivated": state.deactivated_count,
-            "message": state.message,
-            "synced_at": state.synced_at.isoformat() if state.synced_at else None,
-        } if state else None,
     }
-    if own_session:
-        db.close()
-    return result

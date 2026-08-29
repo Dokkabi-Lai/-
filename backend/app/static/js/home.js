@@ -55,7 +55,6 @@ function renderGroupActivity(activity) {
             (item.nickname || "群友") + " +" + item.count
           );
         }),
-        activity.sync_count ? el("span", { class: "activity-person sync" }, "表格同步 +" + activity.sync_count) : null,
         !activity.total ? el("span", { class: "muted" }, "成为今天第一个分享岗位的人") : null
       )
     ),
