@@ -82,10 +82,13 @@ async function loadCalendarData() {
   try {
     var monthUrl = "/api/calendar/month?year=" + calYear + "&month=" + calMonth;
     var statsUrl = "/api/calendar/month/stats?year=" + calYear + "&month=" + calMonth;
-    var data = await API.get(monthUrl);
+    // 两个接口互不依赖，提前并行请求，减少日历首次打开的等待时间。
+    var monthRequest = API.get(monthUrl);
+    var statsRequest = API.get(statsUrl);
+    var data = await monthRequest;
     renderCalGrid(data.events || []);
     renderEventList(data.events || []);
-    API.get(statsUrl).then(function(stats) {
+    statsRequest.then(function(stats) {
       renderCalStats(stats);
     }).catch(function() {});
   } catch(e) {

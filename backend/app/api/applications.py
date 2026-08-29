@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
 from .deps import get_current_group, get_current_user
@@ -126,7 +126,9 @@ def create_application(
 @router.get("")
 def list_applications(status: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有投递记录，每条记录带上所有阶段信息。"""
-    q = db.query(Application).filter(Application.user_id == user.id)
+    q = db.query(Application).options(selectinload(Application.stages)).filter(
+        Application.user_id == user.id
+    )
     if status:
         q = q.filter(Application.status == status)
     rows = q.order_by(desc(Application.updated_at)).all()
@@ -137,7 +139,9 @@ def list_applications(status: Optional[str] = None, db: Session = Depends(get_db
 @router.get("/offers/list")
 def list_offers(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有已拿到 Offer 的投递记录"""
-    apps = db.query(Application).filter(Application.status == "已完成", Application.user_id == user.id).order_by(desc(Application.updated_at)).all()
+    apps = db.query(Application).options(selectinload(Application.stages)).filter(
+        Application.status == "已完成", Application.user_id == user.id
+    ).order_by(desc(Application.updated_at)).all()
     return [_serialize_app(a) for a in apps]
 
 
@@ -145,7 +149,9 @@ def list_offers(db: Session = Depends(get_db), user: User = Depends(get_current_
 @router.get("/reviews/all")
 def list_all_reviews(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有有复盘反馈的阶段，按公司分组"""
-    stages = db.query(ApplicationStage).join(Application).filter(
+    stages = db.query(ApplicationStage).join(Application).options(
+        contains_eager(ApplicationStage.application)
+    ).filter(
         Application.user_id == user.id,
         ApplicationStage.feedback.isnot(None),
         ApplicationStage.feedback != "",
@@ -249,7 +255,9 @@ def _weekly_counts(apps: list[Application]) -> list[dict]:
 @router.get("/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取单条投递详情，包含所有阶段。"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(selectinload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
     return _serialize_app(app)

@@ -66,7 +66,12 @@ def _get_mark(db: Session, user_id: int, job_id: int) -> JobMark:
     return mark
 
 
-def _serialize(job: Job, applied: bool = False, mark: JobMark | None = None) -> dict:
+def _serialize(
+    job: Job,
+    applied: bool = False,
+    mark: JobMark | None = None,
+    include_details: bool = True,
+) -> dict:
     return {
         "id": job.id,
         "source": job.source,
@@ -75,8 +80,10 @@ def _serialize(job: Job, applied: bool = False, mark: JobMark | None = None) -> 
         "company_type": job.company_type,
         "location": job.location,
         "salary": job.salary,
-        "description": job.description,
-        "requirements": job.requirements,
+        # 岗位列表只需要摘要；详情在点击岗位时按需加载，避免把整张 JD
+        # 随 500 条岗位一起传到手机端。
+        "description": job.description if include_details else None,
+        "requirements": job.requirements if include_details else None,
         "batch": job.batch,
         "open_date": job.open_date.isoformat() if job.open_date else None,
         "close_date": job.close_date.isoformat() if job.close_date else None,
@@ -104,6 +111,7 @@ def list_jobs(
     source: Optional[str] = None,
     hide_passed: bool = True,
     applied: Optional[str] = None,
+    summary: bool = False,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -155,7 +163,13 @@ def list_jobs(
         q = q.filter(~Job.id.in_(applied_ids))
     total = q.count()
     rows = q.order_by(desc(Job.created_at)).offset(offset).limit(limit).all()
-    return {"total": total, "items": [_serialize(j, j.id in applied_ids, marks.get(j.id)) for j in rows]}
+    return {
+        "total": total,
+        "items": [
+            _serialize(j, j.id in applied_ids, marks.get(j.id), include_details=not summary)
+            for j in rows
+        ],
+    }
 
 
 @router.get("/batches/list")

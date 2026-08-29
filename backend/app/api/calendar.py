@@ -5,7 +5,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
 from .deps import get_current_group, get_current_user
@@ -47,7 +47,9 @@ def today(
     # 今日日程：从 application_stages 获取今天有安排的
     day_start = dt.datetime.combine(today_date, dt.time.min)
     day_end = dt.datetime.combine(today_date, dt.time.max)
-    today_stages = db.query(ApplicationStage).join(Application).filter(
+    today_stages = db.query(ApplicationStage).join(Application).options(
+        contains_eager(ApplicationStage.application)
+    ).filter(
         Application.user_id == user.id,
         and_(
             ApplicationStage.scheduled_at.isnot(None),
@@ -56,7 +58,9 @@ def today(
         )
     ).order_by(ApplicationStage.scheduled_at).all()
 
-    deadline_stages = db.query(ApplicationStage).join(Application).filter(
+    deadline_stages = db.query(ApplicationStage).join(Application).options(
+        contains_eager(ApplicationStage.application)
+    ).filter(
         Application.user_id == user.id,
         ApplicationStage.stage == "笔试",
         ApplicationStage.schedule_type == "deadline",
@@ -114,7 +118,9 @@ def month_view(year: int, month: int, db: Session = Depends(get_db), user: User 
     events = []
     stage_start = dt.datetime.combine(start, dt.time.min)
     stage_end = dt.datetime.combine(end, dt.time.min)
-    stages = db.query(ApplicationStage).join(Application).filter(
+    stages = db.query(ApplicationStage).join(Application).options(
+        contains_eager(ApplicationStage.application)
+    ).filter(
         Application.user_id == user.id,
         or_(
             and_(

@@ -71,12 +71,16 @@ window.load_jobs = async function() {
 
 async function loadFilterOptions() {
   try {
-    var batches = await API.get("/api/jobs/batches/list");
+    var results = await Promise.all([
+      API.get("/api/jobs/batches/list"),
+      API.get("/api/jobs/company-types/list")
+    ]);
+    var batches = results[0];
+    var types = results[1];
     var batchSelect = document.getElementById("f-batch");
     batches.forEach(function(b) {
       batchSelect.appendChild(el("option", { value: b.batch }, b.batch + " (" + b.count + ")"));
     });
-    var types = await API.get("/api/jobs/company-types/list");
     var typeSelect = document.getElementById("f-type");
     types.forEach(function(t) {
       typeSelect.appendChild(el("option", { value: t.company_type }, t.company_type + " (" + t.count + ")"));
@@ -117,6 +121,8 @@ async function loadJobs() {
   if (showPassed) params.set("hide_passed", "false");
   if (favorite) params.set("favorited", "true");
   if (_jobApplyFilter !== "all") params.set("applied", _jobApplyFilter);
+  // 列表不传完整 JD，点开岗位时再加载详情，明显减小手机端首屏响应体。
+  params.set("summary", "true");
   params.set("limit", "500");
   list.innerHTML = '<div class="loading">加载中…</div>';
   try {
@@ -238,7 +244,26 @@ function openJobMoreSheet(j) {
   showModal("", sheet, [], { sheet: true });
 }
 
-function showJobDetail(j) {
+async function showJobDetail(j) {
+  if (!j._detailsLoaded) {
+    showModal(j.company + " · " + j.title,
+      el("div", { class: "loading" }, "正在加载岗位详情…"),
+      [el("button", { class: "btn", onclick: closeModal }, "关闭")]
+    );
+    try {
+      var details = await API.get("/api/jobs/" + j.id);
+      Object.assign(j, details);
+      j._detailsLoaded = true;
+    } catch (e) {
+      closeModal();
+      toast("岗位详情加载失败，请稍后重试", "error");
+      return;
+    }
+  }
+  renderJobDetail(j);
+}
+
+function renderJobDetail(j) {
   var body = el("div", { class: "job-detail" },
     el("div", { class: "job-detail-header" },
       el("div", { class: "company-avatar lg" }, j.company.charAt(0)),
@@ -265,6 +290,12 @@ function showJobDetail(j) {
     body.appendChild(el("div", { class: "detail-section" },
       el("h5", { class: "detail-section-title" }, "📋 岗位 JD"),
       el("div", { class: "detail-content pre-wrap" }, j.description)
+    ));
+  }
+  if (j.requirements) {
+    body.appendChild(el("div", { class: "detail-section" },
+      el("h5", { class: "detail-section-title" }, "✓ 任职要求"),
+      el("div", { class: "detail-content pre-wrap" }, j.requirements)
     ));
   }
 

@@ -5,8 +5,8 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, desc, func
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, desc, func
+from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
 from .deps import get_current_group, get_current_user
@@ -115,7 +115,9 @@ def home_feed(
 
     day_start = dt.datetime.combine(today, dt.time.min)
     day_end = dt.datetime.combine(today, dt.time.max)
-    today_stages = db.query(ApplicationStage).join(Application).filter(
+    today_stages = db.query(ApplicationStage).join(Application).options(
+        contains_eager(ApplicationStage.application)
+    ).filter(
         Application.user_id == user.id,
         and_(
             ApplicationStage.scheduled_at.isnot(None),
@@ -124,17 +126,20 @@ def home_feed(
         ),
     ).order_by(ApplicationStage.scheduled_at).all()
 
-    today_start = dt.datetime.combine(today, dt.time.min)
     job_day_start = (
         dt.datetime.combine(today, dt.time.min, tzinfo=ZoneInfo("Asia/Shanghai"))
         .astimezone(dt.timezone.utc)
         .replace(tzinfo=None)
     )
-    new_today_count = db.query(Job).filter(
+    job_counts = db.query(
+        func.count(Job.id),
+        func.sum(case((Job.created_at >= job_day_start, 1), else_=0)),
+    ).filter(
         Job.group_id == group.id,
         Job.is_active.is_not(False),
-        Job.created_at >= job_day_start,
-    ).count()
+    ).one()
+    total_jobs = int(job_counts[0] or 0)
+    new_today_count = int(job_counts[1] or 0)
     contributor_rows = db.query(User, func.count(Job.id)).join(
         Job, Job.created_by_id == User.id
     ).filter(
@@ -143,30 +148,20 @@ def home_feed(
         Job.created_at >= job_day_start,
     ).group_by(User.id).order_by(func.count(Job.id).desc()).all()
 
-    in_progress_apps = db.query(Application).filter(
+    # 投递记录一次取出后在内存中分组，避免首页为同一用户重复发起 5 次统计查询。
+    user_apps = db.query(Application).filter(
         Application.user_id == user.id,
-        Application.status.notin_(["已淘汰", "已完成"]),
-    ).order_by(desc(Application.updated_at)).limit(12).all()
-
-    rejected_apps = db.query(Application).filter(
-        Application.user_id == user.id,
-        Application.status == "已淘汰",
-    ).order_by(desc(Application.updated_at)).limit(12).all()
-
-    total_jobs = db.query(Job).filter(
-        Job.group_id == group.id, Job.is_active.is_not(False)
-    ).count()
-    total_apps = db.query(Application).filter(Application.user_id == user.id).count()
-    offer_count = db.query(Application).filter(
-        Application.status == "已完成", Application.user_id == user.id
-    ).count()
-    rejected_count = db.query(Application).filter(
-        Application.status == "已淘汰", Application.user_id == user.id
-    ).count()
-    in_progress_count = db.query(Application).filter(
-        Application.status.notin_(["已淘汰", "已完成"]),
-        Application.user_id == user.id,
-    ).count()
+    ).order_by(desc(Application.updated_at)).all()
+    in_progress_apps = [
+        a for a in user_apps if a.status not in ("已淘汰", "已完成")
+    ][:12]
+    rejected_apps = [a for a in user_apps if a.status == "已淘汰"][:12]
+    total_apps = len(user_apps)
+    offer_count = sum(1 for a in user_apps if a.status == "已完成")
+    rejected_count = sum(1 for a in user_apps if a.status == "已淘汰")
+    in_progress_count = sum(
+        1 for a in user_apps if a.status not in ("已淘汰", "已完成")
+    )
     notifications = _deadline_notifications(db, user, group, today)
 
     return {

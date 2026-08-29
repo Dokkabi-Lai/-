@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -162,7 +163,11 @@ class Preference(Base):
 class Job(Base):
     """秋招岗位（Excel 导入）。"""
     __tablename__ = "jobs"
-    __table_args__ = (UniqueConstraint("source", "source_id", name="uq_job_source"),)
+    __table_args__ = (
+        UniqueConstraint("source", "source_id", name="uq_job_source"),
+        Index("ix_jobs_group_active_close", "group_id", "is_active", "close_date"),
+        Index("ix_jobs_group_created", "group_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
@@ -210,6 +215,10 @@ class SyncState(Base):
 class Application(Base):
     """投递记录。"""
     __tablename__ = "applications"
+    __table_args__ = (
+        Index("ix_applications_user_updated", "user_id", "updated_at"),
+        Index("ix_applications_user_status", "user_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)  # nullable 以兼容老数据
@@ -238,6 +247,16 @@ class Application(Base):
 class ApplicationStage(Base):
     """投递流程中的每个阶段。"""
     __tablename__ = "application_stages"
+    __table_args__ = (
+        Index("ix_application_stages_application", "application_id"),
+        Index("ix_application_stages_schedule", "scheduled_at"),
+        Index(
+            "ix_application_stages_deadline",
+            "stage",
+            "schedule_type",
+            "deadline_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False)
@@ -408,6 +427,35 @@ def _migrate_db(engine) -> None:
             conn.execute(text("UPDATE application_stages SET schedule_type = 'exact' WHERE schedule_type IS NULL OR schedule_type = ''"))
 
 
+def _ensure_query_indexes(engine) -> None:
+    """为已存在的数据库补建查询索引。
+
+    ``Base.metadata.create_all`` 只会可靠地为新建表创建索引；老用户的
+    数据库需要显式补建，否则升级后仍然会走全表扫描。
+    """
+    from sqlalchemy import text
+
+    statements = (
+        "CREATE INDEX IF NOT EXISTS ix_jobs_group_active_close "
+        "ON jobs (group_id, is_active, close_date)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_group_created "
+        "ON jobs (group_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_applications_user_updated "
+        "ON applications (user_id, updated_at)",
+        "CREATE INDEX IF NOT EXISTS ix_applications_user_status "
+        "ON applications (user_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_application_stages_application "
+        "ON application_stages (application_id)",
+        "CREATE INDEX IF NOT EXISTS ix_application_stages_schedule "
+        "ON application_stages (scheduled_at)",
+        "CREATE INDEX IF NOT EXISTS ix_application_stages_deadline "
+        "ON application_stages (stage, schedule_type, deadline_at)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 def _ensure_default_group(engine) -> None:
     """把升级前的全局岗位和用户安全迁入默认群组。"""
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -449,6 +497,7 @@ def init_db():
     engine = get_engine()
     Base.metadata.create_all(engine)
     _migrate_db(engine)
+    _ensure_query_indexes(engine)
     _ensure_default_group(engine)
 
 
