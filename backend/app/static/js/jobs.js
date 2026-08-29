@@ -1,28 +1,13 @@
 window.load_jobs = async function() {
   var page = document.getElementById("page-jobs");
   page.innerHTML = "";
-  var status = {};
-  try { status = await API.get("/api/jobs/import/status"); } catch (e) {}
-  window._canSyncJobs = !!status.can_sync;
-
-  var actions = el("div", { class: "header-actions" });
-  if (status.can_manage) {
-    actions.appendChild(el("button", { class: "btn primary", onclick: openJobGrid }, "表格录入"));
-    actions.appendChild(el("button", { class: "btn", onclick: function() { showAddJob(); } }, "+ 单条添加"));
-  }
-  if (status.can_sync) {
-    actions.appendChild(el("button", { class: "btn", onclick: function() { pickExcelFile(); } }, "上传 Excel"));
-    actions.appendChild(el("button", { class: "btn", onclick: function() { reloadExcel(); } }, "重新导入"));
-  }
+  var actions = el("div", { class: "header-actions", id: "jobs-header-actions" });
+  var sub = el("div", { class: "page-sub muted", id: "jobs-header-sub" }, "岗位由群主和管理员维护");
 
   page.appendChild(el("div", { class: "page-header" },
     el("div", {},
       el("h1", { class: "page-title" }, "岗位库"),
-      el("div", { class: "page-sub muted" },
-        status.uploaded_at
-          ? "最近上传：" + status.uploaded_at.replace("T", " ").slice(0, 16)
-          : status.can_manage ? "上传 Excel 或表格录入，建立共享岗位库" : "岗位由群主和管理员维护"
-      )
+      sub
     ),
     actions
   ));
@@ -64,8 +49,24 @@ window.load_jobs = async function() {
   ));
   page.appendChild(el("div", { id: "job-list" }, el("div", { class: "loading" }, "加载中…")));
 
-  await loadFilterOptions();
   loadJobs();
+  loadFilterOptions();
+  API.get("/api/jobs/import/status").then(function(status) {
+    window._canSyncJobs = !!status.can_sync;
+    if (status.can_manage) {
+      actions.appendChild(el("button", { class: "btn primary", onclick: openJobGrid }, "表格录入"));
+      actions.appendChild(el("button", { class: "btn", onclick: function() { showAddJob(); } }, "+ 单条添加"));
+    }
+    if (status.can_sync) {
+      actions.appendChild(el("button", { class: "btn", onclick: function() { pickExcelFile(); } }, "上传 Excel"));
+      actions.appendChild(el("button", { class: "btn", onclick: function() { reloadExcel(); } }, "重新导入"));
+    }
+    if (status.uploaded_at) {
+      sub.textContent = "最近上传：" + status.uploaded_at.replace("T", " ").slice(0, 16);
+    } else if (status.can_manage) {
+      sub.textContent = "上传 Excel 或表格录入，建立共享岗位库";
+    }
+  }).catch(function() {});
 };
 
 async function loadFilterOptions() {
@@ -306,6 +307,7 @@ function quickApply(j) {
         });
         toast("已记录投递！去流程跟踪查看 →");
         closeModal();
+        if (typeof invalidatePages === "function") invalidatePages();
         loadJobs();
       } catch(e) { toast("失败: " + e.message); }
     } }, "确认投递"),

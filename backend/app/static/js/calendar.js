@@ -47,13 +47,14 @@ async function renderCalendarPage() {
 
 async function loadCalendarData() {
   try {
-    var data = await API.get("/api/calendar/month?year=" + calYear + "&month=" + calMonth);
+    var monthUrl = "/api/calendar/month?year=" + calYear + "&month=" + calMonth;
+    var statsUrl = "/api/calendar/month/stats?year=" + calYear + "&month=" + calMonth;
+    var data = await API.get(monthUrl);
     renderCalGrid(data.events || []);
     renderEventList(data.events || []);
-    try {
-      var stats = await API.get("/api/calendar/month/stats?year=" + calYear + "&month=" + calMonth);
+    API.get(statsUrl).then(function(stats) {
       renderCalStats(stats);
-    } catch(e) {}
+    }).catch(function() {});
   } catch(e) {
     document.getElementById("cal-grid").innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }

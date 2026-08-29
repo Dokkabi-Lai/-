@@ -43,8 +43,13 @@ window.load_home = async function() {
     page.appendChild(el("div", { id: "dash-funnel" }, el("div", { class: "loading" }, "加载图表…")));
     page.appendChild(el("div", { id: "review-list" }));
 
-    if (typeof loadDashboard === "function") loadDashboard();
-    if (typeof loadReviews === "function") setTimeout(loadReviews, 50);
+    var later = window.requestIdleCallback || function(fn) { setTimeout(fn, 600); };
+    later(function() {
+      if (typeof loadDashboard === "function") loadDashboard();
+    });
+    later(function() {
+      if (typeof loadReviews === "function") loadReviews();
+    });
   } catch(e) {
     page.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }

@@ -79,7 +79,8 @@ async function switchGroup(groupId) {
     closeModal();
     toast("已切换到「" + groupState.active.name + "」", "success");
     var activePage = document.querySelector(".page.active");
-    showPage(activePage ? activePage.id.replace("page-", "") : "home");
+    if (typeof invalidatePages === "function") invalidatePages();
+    showPage(activePage ? activePage.id.replace("page-", "") : "home", true);
   } catch (e) {
     toast("切换失败：" + parseGroupError(e), "error");
   }
@@ -106,7 +107,8 @@ async function createGroup() {
     await initGroups();
     closeModal();
     toast("群组创建成功", "success");
-    showPage("jobs");
+    if (typeof invalidatePages === "function") invalidatePages();
+    showPage("jobs", true);
   } catch (e) {
     toast("创建失败：" + parseGroupError(e), "error");
   }
@@ -179,7 +181,8 @@ async function leaveCurrentGroup() {
     localStorage.removeItem("activeGroupId");
     await initGroups();
     closeModal();
-    showPage("home");
+    if (typeof invalidatePages === "function") invalidatePages();
+    showPage("home", true);
   } catch (e) {
     toast(parseGroupError(e), "error");
   }
@@ -194,7 +197,8 @@ async function deleteCurrentGroup() {
     await initGroups();
     closeModal();
     toast("群组已删除", "success");
-    showPage("home");
+    if (typeof invalidatePages === "function") invalidatePages();
+    showPage("home", true);
   } catch (e) {
     toast("删除失败：" + parseGroupError(e), "error");
   }
@@ -231,7 +235,8 @@ async function acceptInvite(token) {
     await initGroups();
     closeModal();
     toast("已加入「" + group.name + "」", "success");
-    showPage("jobs");
+    if (typeof invalidatePages === "function") invalidatePages();
+    showPage("jobs", true);
   } catch (e) {
     toast("加入失败：" + parseGroupError(e), "error");
   }

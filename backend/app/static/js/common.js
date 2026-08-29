@@ -123,13 +123,21 @@ function emptyState(text) {
 }
 
 // === 导航切换 ===
-function showPage(name) {
+var _renderedPages = {};
+
+function invalidatePages() {
+  _renderedPages = {};
+}
+
+function showPage(name, force) {
   document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
   document.querySelectorAll(".nav-item").forEach(function(n) { n.classList.remove("active"); });
   var page = document.getElementById("page-" + name);
   if (page) page.classList.add("active");
   var nav = document.querySelector('.nav-item[data-page="' + name + '"]');
   if (nav) nav.classList.add("active");
+  if (!force && _renderedPages[name] && page && page.childElementCount) return;
+  _renderedPages[name] = true;
   if (window["load_" + name]) window["load_" + name]();
 }
 

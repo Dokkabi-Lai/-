@@ -44,6 +44,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
   background:
@@ -1689,6 +1694,72 @@ button, input, textarea, select { font: inherit; }
   .chart-grid { grid-template-columns: 1fr !important; }
   .home-review-title { margin: 16px 0 10px; }
 
+  .app, .main, .page, .card, .filter-bar, .company-group, .pipeline-card {
+    max-width: 100%;
+  }
+  img, svg, video, canvas { max-width: 100%; }
+  input, select, textarea, button { max-width: 100%; }
+
+  .company-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .company-right {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .company-right .batch-chip,
+  .company-right .chip,
+  .company-right .deadline-chip { display: none; }
+  .company-right .btn { flex: 1; min-width: 0; justify-content: center; }
+
+  .job-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .job-row-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .pipeline-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .pipeline-actions { align-items: stretch; }
+  .pipeline-actions .btn-group { width: 100%; }
+  .pipeline-card { overflow: hidden; }
+  .pipeline-stages {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-header .cal-nav {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .cal-month-label { min-width: 0; flex: 1; }
+  .cal-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .cal-stat-card { padding: 12px 8px; min-width: 0; }
+  .cal-stat-num { font-size: 20px; }
+  .cal-cell { min-height: 44px; min-width: 0; }
+  .cal-event { display: none; }
+  .cal-legend { flex-wrap: wrap; gap: 8px; }
+}
 
 @media (max-width: 380px) {
   .sidebar .nav-item .label { font-size: 9px; }
