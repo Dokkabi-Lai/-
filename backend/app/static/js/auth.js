@@ -1,7 +1,7 @@
 var currentUser = null;
 var isRegisterMode = false;
 var selectedAuthEmoji = "🌱";
-var AVATAR_EMOJIS = ["🌱", "🎯", "🚀", "🍊", "🦊", "🐳", "🌻", "🪐", "🧭", "💡", "📚", "☕"];
+var AVATAR_EMOJIS = ["🌱", "🎯", "🚀", "🍊", "🦊", "🐳", "🌻", "🪐", "🧭", "💡", "📚", "☕", "🚗", "🌧️"];
 
 function initAuth() {
   var saved = localStorage.getItem("user");

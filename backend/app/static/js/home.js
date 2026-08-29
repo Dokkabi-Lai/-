@@ -12,7 +12,8 @@ window.load_home = async function() {
         el("div", { class: "eyebrow" }, (data.group && data.group.name) || "MY JOB JOURNEY"),
         el("h2", {}, greeting + "，" + ((currentUser && currentUser.nickname) || "求职人")),
         el("p", {}, (currentUser && currentUser.bio) || "把投递、面试和 Offer 都放在一处跟进")
-      )
+      ),
+      el("div", { class: "welcome-ornament", "aria-hidden": "true" }, "秋")
     ));
 
     var s = data.stats;
@@ -22,7 +23,7 @@ window.load_home = async function() {
     page.appendChild(el("div", { class: "stats-grid" },
       statCard("↻", s.in_progress_count || 0, "进行中", "info", "track"),
       statCard("✕", s.rejected_count || 0, "已淘汰", "gray", "track"),
-      statCard("★", s.offer_count, "Offer", "green", "offers"),
+      statCard("★", s.offer_count, "Offer", "green", "track-offers"),
       statCard("☰", s.total_apps, "总投递", "purple", "track")
     ));
 
@@ -34,6 +35,16 @@ window.load_home = async function() {
     twoCol.appendChild(renderAppSection("进行中", "当前流程中的投递", data.in_progress_apps, "info"));
     twoCol.appendChild(renderAppSection("已淘汰", "流程已结束的投递", data.rejected_apps, "gray"));
     page.appendChild(twoCol);
+
+    page.appendChild(el("div", { class: "home-section-head", id: "home-dashboard" },
+      el("h2", { class: "section-title" }, "投递仪表盘"),
+      el("p", { class: "section-sub muted" }, "漏斗、阶段分布与每周投递量")
+    ));
+    page.appendChild(el("div", { id: "dash-funnel" }, el("div", { class: "loading" }, "加载图表…")));
+    page.appendChild(el("div", { id: "review-list" }));
+
+    if (typeof loadDashboard === "function") loadDashboard();
+    if (typeof loadReviews === "function") loadReviews();
   } catch(e) {
     page.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }
@@ -63,7 +74,14 @@ function renderGroupActivity(activity) {
 }
 
 function statCard(icon, num, label, color, targetPage) {
-  return el("div", { class: "stat-card stat-" + color + (targetPage ? " clickable" : ""), onclick: targetPage ? function() { showPage(targetPage); } : null },
+  return el("div", { class: "stat-card stat-" + color + (targetPage ? " clickable" : ""), onclick: targetPage ? function() {
+    if (targetPage === "track-offers") {
+      window._trackFilterPending = "offers";
+      showPage("track");
+      return;
+    }
+    showPage(targetPage);
+  } : null },
     el("div", { class: "stat-icon" }, icon),
     el("div", { class: "stat-body" },
       el("div", { class: "stat-num" }, num),

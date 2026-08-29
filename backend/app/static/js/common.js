@@ -134,25 +134,31 @@ function showPage(name) {
 }
 
 // === 模态框 ===
-function showModal(title, contentNode, footerNodes) {
+function showModal(title, contentNode, footerNodes, opts) {
   var mask = document.getElementById("modal-mask");
   mask.innerHTML = "";
-  var modal = el("div", { class: "modal" },
-    el("h3", {},
-      el("span", { class: "close", onclick: function() { mask.classList.remove("show"); } }, "×"),
-      title,
-    ),
-    contentNode,
+  var modal = el("div", { class: "modal" + (opts && opts.sheet ? " sheet-modal" : "") },
+    title
+      ? el("h3", {},
+          el("span", { class: "close", onclick: closeModal }, "×"),
+          title
+        )
+      : null,
+    contentNode
   );
   if (footerNodes && footerNodes.length) {
     modal.appendChild(el("div", { class: "modal-footer" }, ...footerNodes));
   }
   mask.appendChild(modal);
   mask.classList.add("show");
+  if (opts && opts.sheet) mask.classList.add("sheet-mask");
+  else mask.classList.remove("sheet-mask");
 }
 
 function closeModal() {
-  document.getElementById("modal-mask").classList.remove("show");
+  var mask = document.getElementById("modal-mask");
+  mask.classList.remove("show");
+  mask.classList.remove("sheet-mask");
 }
 
 document.addEventListener("keydown", function(event) {

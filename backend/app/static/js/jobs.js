@@ -201,8 +201,7 @@ function jobRow(j) {
       el("div", { class: "job-row-info" },
         el("span", { class: "chip sm " + (applied ? "applied" : "unapplied") }, applied ? "已投递" : "未投递"),
         j.batch ? el("span", { class: "info-chip batch-chip" }, j.batch) : null,
-        j.location ? el("span", { class: "info-chip" }, "📍 " + j.location) : null,
-        j.apply_rule ? el("span", { class: "info-chip" }, j.apply_rule) : null,
+        j.location ? el("span", { class: "info-chip" }, j.location) : null,
         formatCloseDate(j) ? el("span", { class: "info-chip" }, formatCloseDate(j)) : null
       )
     ),
@@ -213,12 +212,29 @@ function jobRow(j) {
         onclick: function(e) { e.stopPropagation(); toggleFav(j.id); }
       }, j.favorited ? "★" : "☆"),
       applied
-        ? el("button", { class: "btn sm", title: "已记录投递", onclick: function(e) { e.stopPropagation(); showPage("track"); } }, "查看流程")
+        ? el("button", { class: "btn sm ghost", title: "已记录投递", onclick: function(e) { e.stopPropagation(); showPage("track"); } }, "流程")
         : el("button", { class: "btn sm primary", title: "记录投递", onclick: function(e) { e.stopPropagation(); quickApply(j); } }, "投递"),
-      j.url ? el("a", { href: j.url, target: "_blank", class: "btn sm", title: "官网投递", onclick: function(e) { e.stopPropagation(); } }, "链接") : null,
-      el("button", { class: "btn sm" + (isPassed ? " active" : ""), title: isPassed ? "取消Pass" : "Pass", onclick: function(e) { e.stopPropagation(); togglePass(j.id); } }, isPassed ? "已Pass" : "Pass")
+      el("button", {
+        class: "icon-btn more-btn",
+        title: "更多操作",
+        onclick: function(e) { e.stopPropagation(); openJobMoreSheet(j); }
+      }, "···")
     )
   );
+}
+
+function openJobMoreSheet(j) {
+  var isPassed = !!j.passed;
+  var sheet = el("div", { class: "action-sheet" },
+    el("div", { class: "action-sheet-handle" }),
+    el("div", { class: "action-sheet-title" }, j.company + " · " + j.title),
+    el("button", { class: "action-sheet-item", onclick: function() { closeModal(); showJobDetail(j); } }, "查看详情"),
+    j.url ? el("a", { class: "action-sheet-item", href: j.url, target: "_blank", onclick: closeModal }, "打开投递链接") : null,
+    el("button", { class: "action-sheet-item", onclick: function() { closeModal(); togglePass(j.id); } }, isPassed ? "取消 Pass" : "标记 Pass"),
+    el("button", { class: "action-sheet-item danger", onclick: function() { closeModal(); deleteJob(j); } }, "删除岗位"),
+    el("button", { class: "action-sheet-cancel", onclick: closeModal }, "取消")
+  );
+  showModal("", sheet, [], { sheet: true });
 }
 
 function showJobDetail(j) {
@@ -253,8 +269,23 @@ function showJobDetail(j) {
 
   showModal(j.company + " · " + j.title, body, [
     el("button", { class: "btn primary", onclick: function() { quickApply(j); } }, "📝 记录投递"),
+    el("button", { class: "btn danger", onclick: function() { deleteJob(j); } }, "删除岗位"),
     el("button", { class: "btn", onclick: closeModal }, "关闭")
   ]);
+}
+
+async function deleteJob(j) {
+  if (!confirm("确定从岗位库删除「" + j.company + " · " + j.title + "」吗？仅群主或添加者可删除。")) return;
+  try {
+    await API.del("/api/jobs/" + j.id);
+    toast("岗位已删除", "success");
+    closeModal();
+    loadJobs();
+  } catch (e) {
+    var msg = e.message || "";
+    try { msg = JSON.parse(msg).detail || msg; } catch (_) {}
+    toast("删除失败：" + msg, "error");
+  }
 }
 
 function quickApply(j) {

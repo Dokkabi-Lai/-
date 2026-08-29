@@ -70,7 +70,8 @@ async function deleteOffer(appId) {
   try {
     await API.del("/api/applications/" + appId);
     toast("已删除");
-    loadOffers();
+    if (document.getElementById("track-list") && typeof loadApplications === "function") loadApplications();
+    else loadOffers();
   } catch(e) { toast("删除失败: " + e.message); }
 }
 

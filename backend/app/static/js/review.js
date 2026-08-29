@@ -1,16 +1,9 @@
-window.load_review = async function() {
-  var page = document.getElementById("page-review");
-  page.innerHTML = "";
-  page.appendChild(el("div", { class: "page-header" },
-    el("div", {},
-      el("h1", { class: "page-title" }, "投递仪表盘"),
-      el("div", { class: "page-sub muted" }, "用图表看进度、淘汰环节和每周投递量")
-    )
-  ));
-  page.appendChild(el("div", { id: "dash-funnel" }, el("div", { class: "loading" }, "加载中…")));
-  page.appendChild(el("div", { id: "review-list" }));
-  loadDashboard();
-  loadReviews();
+window.load_review = function() {
+  showPage("home");
+  setTimeout(function() {
+    var target = document.getElementById("home-dashboard");
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 120);
 };
 
 async function loadDashboard() {
@@ -157,7 +150,7 @@ async function loadReviews() {
   try {
     var data = await API.get("/api/applications/reviews/all");
     box.innerHTML = "";
-    box.appendChild(el("h3", { class: "card-title mb-16" }, "面试记录"));
+    box.appendChild(el("h3", { class: "card-title home-review-title" }, "面试记录"));
     if (!data.length) {
       box.appendChild(emptyState("还没有面试记录。在流程跟踪里给各阶段写反馈，会汇总到这里。"));
       return;

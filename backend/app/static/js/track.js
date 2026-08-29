@@ -5,21 +5,25 @@ var _trackGroupBy = "company"; // company or flat
 window.load_track = async function() {
   var page = document.getElementById("page-track");
   page.innerHTML = "";
+  if (window._trackFilterPending) {
+    _trackFilter = window._trackFilterPending;
+    window._trackFilterPending = null;
+  }
   page.appendChild(el("div", { class: "page-header" },
     el("div", {},
-      el("h1", { class: "page-title" }, "投递跟踪"),
-      el("div", { class: "page-sub muted" }, "管理投递流程，通过一个环节自动进入下一个")
+      el("h1", { class: "page-title" }, "流程跟踪"),
+      el("div", { class: "page-sub muted" }, "流程、Offer 与进度都在这里")
     ),
     el("button", { class: "btn primary", onclick: function() { showAddApplication(); } }, "+ 新增投递")
   ));
 
-  // 筛选栏
   page.appendChild(el("div", { class: "track-toolbar" },
-    el("div", { class: "filter-tabs", id: "track-tabs" },
-      el("button", { class: "tab-btn active", "data-filter": "all", onclick: function() { setTrackFilter("all"); } }, "全部"),
-      el("button", { class: "tab-btn", "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
-      el("button", { class: "tab-btn", "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
-      el("button", { class: "tab-btn", "data-filter": "completed", onclick: function() { setTrackFilter("completed"); } }, "已完成")
+    el("div", { class: "filter-tabs scroll-tabs", id: "track-tabs" },
+      el("button", { class: "tab-btn" + (_trackFilter === "all" ? " active" : ""), "data-filter": "all", onclick: function() { setTrackFilter("all"); } }, "全部"),
+      el("button", { class: "tab-btn" + (_trackFilter === "active" ? " active" : ""), "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
+      el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer"),
+      el("button", { class: "tab-btn" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
+      el("button", { class: "tab-btn" + (_trackFilter === "completed" ? " active" : ""), "data-filter": "completed", onclick: function() { setTrackFilter("completed"); } }, "已完成")
     ),
     el("span", { class: "muted text-sm", id: "track-count" })
   ));
@@ -41,16 +45,31 @@ async function loadApplications() {
   if (!box) return;
   try {
     var data = await API.get("/api/applications");
-    // 筛选
     if (_trackFilter === "active") data = data.filter(function(a) { return a.status !== "已淘汰" && a.status !== "已完成"; });
     if (_trackFilter === "rejected") data = data.filter(function(a) { return a.status === "已淘汰"; });
     if (_trackFilter === "completed") data = data.filter(function(a) { return a.status === "已完成"; });
+    if (_trackFilter === "offers") data = data.filter(function(a) { return a.status === "已完成"; });
 
     document.getElementById("track-count").textContent = data.length + " 条";
     box.innerHTML = "";
-    if (!data.length) { box.appendChild(emptyState("暂无投递记录")); return; }
+    if (!data.length) {
+      box.appendChild(emptyState(_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！" : "暂无投递记录"));
+      return;
+    }
 
-    // 按公司分组
+    if (_trackFilter === "offers") {
+      box.appendChild(el("div", { class: "offer-stats" },
+        el("div", { class: "offer-stat-card" },
+          el("div", { class: "offer-stat-num" }, data.length),
+          el("div", { class: "offer-stat-label" }, "Offer 数")
+        )
+      ));
+      data.forEach(function(app) {
+        box.appendChild(typeof offerCard === "function" ? offerCard(app) : appCard(app));
+      });
+      return;
+    }
+
     var groups = {};
     var order = [];
     data.forEach(function(app) {
@@ -59,8 +78,7 @@ async function loadApplications() {
     });
 
     order.forEach(function(company) {
-      var apps = groups[company];
-      box.appendChild(trackCompanyGroup(company, apps));
+      box.appendChild(trackCompanyGroup(company, groups[company]));
     });
   } catch(e) {
     box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';

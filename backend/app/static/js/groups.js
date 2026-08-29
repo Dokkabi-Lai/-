@@ -61,6 +61,9 @@ function openGroupHub() {
       groupState.active.is_owner ? el("button", { class: "btn", onclick: createInviteLink }, "邀请成员") : null,
       !groupState.active.is_owner && !groupState.active.is_system
         ? el("button", { class: "btn danger", onclick: leaveCurrentGroup }, "退出群组")
+        : null,
+      groupState.active.is_owner && !groupState.active.is_system
+        ? el("button", { class: "btn danger", onclick: deleteCurrentGroup }, "删除群组")
         : null
     ));
   }
@@ -182,6 +185,21 @@ async function leaveCurrentGroup() {
   }
 }
 
+async function deleteCurrentGroup() {
+  if (!groupState.active || groupState.active.is_system) return;
+  if (!confirm("删除后群成员将无法再访问该岗位库，岗位会被下架。此操作不可恢复，确定删除「" + groupState.active.name + "」吗？")) return;
+  try {
+    await API.del("/api/groups/" + groupState.active.id);
+    localStorage.removeItem("activeGroupId");
+    await initGroups();
+    closeModal();
+    toast("群组已删除", "success");
+    showPage("home");
+  } catch (e) {
+    toast("删除失败：" + parseGroupError(e), "error");
+  }
+}
+
 async function handleInviteFromUrl() {
   var params = new URLSearchParams(location.search);
   var token = params.get("invite");
@@ -226,9 +244,6 @@ function parseGroupError(e) {
 
 function openMobileMore() {
   var content = el("div", { class: "mobile-more-grid" },
-    el("button", { onclick: function() { closeModal(); showPage("review"); } }, "投递仪表盘"),
-    el("button", { onclick: function() { closeModal(); showPage("offers"); } }, "Offer"),
-    el("button", { onclick: function() { closeModal(); showPage("profile"); } }, "个人主页"),
     el("button", { onclick: function() { closeModal(); openGroupHub(); } }, "群组管理"),
     el("button", { onclick: logout }, "退出登录")
   );

@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _SALT = "pt-autumn-2026"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-ALLOWED_EMOJIS = {"🌱", "🎯", "🚀", "🍊", "🦊", "🐳", "🌻", "🪐", "🧭", "💡", "📚", "☕"}
+ALLOWED_EMOJIS = {"🌱", "🎯", "🚀", "🍊", "🦊", "🐳", "🌻", "🪐", "🧭", "💡", "📚", "☕", "🚗", "🌧️"}
 
 
 def _legacy_hash(pw: str) -> str:

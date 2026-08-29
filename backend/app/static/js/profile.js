@@ -75,7 +75,11 @@ function renderProfile(page, user, stats) {
       el("span", { class: "note-glyph" }, "“"),
       el("h3", {}, "今日小签"),
       el("p", {}, user.bio || "把目标拆成今天能完成的一小步。投递不是一次考试，而是一段不断校准方向的旅程。"),
-      el("div", { class: "note-date" }, new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric" }))
+      el("div", { class: "note-date" }, new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric" })),
+      el("div", { class: "profile-quick-links" },
+        el("button", { class: "btn", onclick: openGroupHub }, "群组管理"),
+        el("button", { class: "btn danger", onclick: logout }, "退出登录")
+      )
     )
   );
   page.appendChild(form);

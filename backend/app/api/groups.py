@@ -142,6 +142,48 @@ def remove_member(
     return {"ok": True}
 
 
+@router.delete("/groups/{group_id}")
+def delete_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """群主删除群组：解散成员、下架岗位，不可删除系统默认群。"""
+    from ..models import Job
+
+    group, _ = _require_owner(db, group_id, user)
+    if group.is_system:
+        raise HTTPException(400, "系统默认群不能删除")
+
+    members = db.query(GroupMember).filter(GroupMember.group_id == group_id).all()
+    member_user_ids = [m.user_id for m in members]
+    for member in members:
+        member.status = "left"
+    for invite in db.query(GroupInvite).filter(
+        GroupInvite.group_id == group_id,
+        GroupInvite.revoked_at.is_(None),
+    ).all():
+        invite.revoked_at = dt.datetime.now()
+    for job in db.query(Job).filter(Job.group_id == group_id, Job.is_active.is_(True)).all():
+        job.is_active = False
+
+    affected_users = db.query(User).filter(
+        User.id.in_(member_user_ids),
+        User.active_group_id == group_id,
+    ).all()
+    for member_user in affected_users:
+        fallback = db.query(GroupMember).filter(
+            GroupMember.user_id == member_user.id,
+            GroupMember.status == "active",
+            GroupMember.group_id != group_id,
+        ).first()
+        member_user.active_group_id = fallback.group_id if fallback else None
+
+    group.name = f"{group.name}（已删除）"
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/groups/{group_id}/leave")
 def leave_group(
     group_id: int,
