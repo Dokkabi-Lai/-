@@ -212,8 +212,8 @@ class Application(Base):
     __tablename__ = "applications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
-    job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)  # nullable 以兼容老数据
+    job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     company: Mapped[str] = mapped_column(String(200))
     title: Mapped[str] = mapped_column(String(200))
     channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 投递渠道
@@ -240,7 +240,7 @@ class ApplicationStage(Base):
     __tablename__ = "application_stages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False, index=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False)
     stage: Mapped[str] = mapped_column(String(50))  # "投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer", "入职"
     status: Mapped[str] = mapped_column(String(20), default="pending")  # "pending" / "current" / "completed" / "skipped"
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 安排的时间（同步到日历）
@@ -328,31 +328,12 @@ def get_engine():
             db_path = BASE_DIR / settings.db.path
             db_path.parent.mkdir(parents=True, exist_ok=True)
             db_url = f"sqlite:///{db_path}"
-        if "sqlite" in db_url:
-            _engine = create_engine(
-                db_url,
-                connect_args={"check_same_thread": False},
-                echo=False,
-            )
-        else:
-            # Remote Supabase: keep a small warm pool. pool_pre_ping adds a
-            # full RTT per request and makes every page feel frozen.
-            _engine = create_engine(
-                db_url,
-                echo=False,
-                pool_size=3,
-                max_overflow=2,
-                pool_recycle=280,
-                pool_pre_ping=False,
-                pool_timeout=10,
-                connect_args={
-                    "connect_timeout": 8,
-                    "keepalives": 1,
-                    "keepalives_idle": 30,
-                    "keepalives_interval": 10,
-                    "keepalives_count": 5,
-                },
-            )
+        _engine = create_engine(
+            db_url,
+            connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
+            echo=False,
+            pool_pre_ping=True,
+        )
     return _engine
 
 
@@ -415,14 +396,6 @@ def _migrate_db(engine) -> None:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN group_id INTEGER"))
             if "created_by_id" not in job_cols:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN created_by_id INTEGER"))
-    with engine.begin() as conn:
-        for stmt in (
-            "CREATE INDEX IF NOT EXISTS ix_applications_user_id ON applications (user_id)",
-            "CREATE INDEX IF NOT EXISTS ix_applications_job_id ON applications (job_id)",
-            "CREATE INDEX IF NOT EXISTS ix_application_stages_application_id ON application_stages (application_id)",
-            "CREATE INDEX IF NOT EXISTS ix_jobs_created_at ON jobs (created_at)",
-        ):
-            conn.execute(text(stmt))
 
 
 def _ensure_default_group(engine) -> None:

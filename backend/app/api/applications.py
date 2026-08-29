@@ -162,7 +162,10 @@ def list_all_reviews(db: Session = Depends(get_db), user: User = Depends(get_cur
     return list(result.values())
 
 
-def build_dashboard(apps: list[Application]) -> dict:
+@router.get("/dashboard")
+def application_dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """投递仪表盘：漏斗与阶段分布。"""
+    apps = db.query(Application).filter(Application.user_id == user.id).all()
     by_stage = {s: 0 for s in STAGES}
     by_status = {"进行中": 0, "已淘汰": 0, "已完成": 0}
     for a in apps:
@@ -200,13 +203,6 @@ def build_dashboard(apps: list[Application]) -> dict:
         "reject_by_stage": _reject_by_stage(apps),
         "weekly": _weekly_counts(apps),
     }
-
-
-@router.get("/dashboard")
-def application_dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """投递仪表盘：漏斗与阶段分布。"""
-    apps = db.query(Application).filter(Application.user_id == user.id).all()
-    return build_dashboard(apps)
 
 
 def _reject_by_stage(apps: list[Application]) -> dict:

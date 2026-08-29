@@ -6,11 +6,11 @@ window.load_review = function() {
   }, 120);
 };
 
-async function loadDashboard(preloaded) {
+async function loadDashboard() {
   var box = document.getElementById("dash-funnel");
   if (!box) return;
   try {
-    var d = preloaded || await API.get("/api/applications/dashboard");
+    var d = await API.get("/api/applications/dashboard");
     box.innerHTML = "";
     var funnel = d.funnel || {};
     var funnelItems = [

@@ -56,27 +56,19 @@ def is_platform_admin(user: User) -> bool:
     return bool(user.is_admin or (user.email or "").lower() in set(get_settings().app.admin_emails))
 
 
-def group_payload(
-    db: Session,
-    group: Group,
-    user: User,
-    member: GroupMember | None = None,
-    member_count: int | None = None,
-) -> dict:
-    if member is None:
-        member = active_membership(db, user.id, group.id)
-    if member_count is None:
-        member_count = db.query(GroupMember).filter(
-            GroupMember.group_id == group.id,
-            GroupMember.status == "active",
-        ).count()
+def group_payload(db: Session, group: Group, user: User) -> dict:
+    member = active_membership(db, user.id, group.id)
+    count = db.query(GroupMember).filter(
+        GroupMember.group_id == group.id,
+        GroupMember.status == "active",
+    ).count()
     platform_admin = is_platform_admin(user)
     return {
         "id": group.id,
         "name": group.name,
         "description": group.description,
         "role": member.role if member else None,
-        "member_count": member_count,
+        "member_count": count,
         "is_system": group.is_system,
         "is_owner": bool(platform_admin or (member and member.role == "owner")),
     }
