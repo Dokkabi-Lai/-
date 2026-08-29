@@ -294,6 +294,7 @@ body {
   transition: all var(--transition);
 }
 .tab-btn.active { background: var(--card-solid); color: var(--blue); box-shadow: var(--shadow-sm); }
+.tab-btn.rejected-filter.active { background: var(--red-light); color: var(--red); }
 .tab-btn:hover:not(.active) { color: var(--text); }
 
 /* === 公司分组 === */

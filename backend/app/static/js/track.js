@@ -24,6 +24,7 @@ window.load_track = async function() {
     el("div", { class: "filter-tabs scroll-tabs", id: "track-tabs" },
       el("button", { class: "tab-btn" + (_trackFilter === "all" ? " active" : ""), "data-filter": "all", onclick: function() { setTrackFilter("all"); } }, "全部"),
       el("button", { class: "tab-btn" + (_trackFilter === "active" ? " active" : ""), "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
+      el("button", { class: "tab-btn rejected-filter" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
       el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer")
     ),
     el("div", { class: "track-search" },
@@ -139,7 +140,9 @@ function renderTrackApplications(allData) {
     document.getElementById("track-count").textContent = data.length + " 条";
     box.innerHTML = "";
     if (!data.length) {
-      var emptyText = query ? "没有匹配的岗位，换个关键词试试" : (_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！" : "暂无投递记录");
+      var emptyText = query ? "没有匹配的岗位，换个关键词试试"
+        : (_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！"
+          : (_trackFilter === "rejected" ? "暂时没有已淘汰的岗位" : "暂无投递记录"));
       box.appendChild(emptyState(emptyText));
       return;
     }
