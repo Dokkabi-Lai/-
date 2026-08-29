@@ -244,6 +244,8 @@ class ApplicationStage(Base):
     stage: Mapped[str] = mapped_column(String(50))  # "投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer", "入职"
     status: Mapped[str] = mapped_column(String(20), default="pending")  # "pending" / "current" / "completed" / "skipped"
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 安排的时间（同步到日历）
+    schedule_type: Mapped[str] = mapped_column(String(20), default="exact", nullable=False)  # exact / deadline，主要用于笔试
+    deadline_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 截止前完成的时间
     completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     form: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # 现场/线上
@@ -396,6 +398,14 @@ def _migrate_db(engine) -> None:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN group_id INTEGER"))
             if "created_by_id" not in job_cols:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN created_by_id INTEGER"))
+    if "application_stages" in insp.get_table_names():
+        stage_cols = {c["name"] for c in insp.get_columns("application_stages")}
+        with engine.begin() as conn:
+            if "schedule_type" not in stage_cols:
+                conn.execute(text("ALTER TABLE application_stages ADD COLUMN schedule_type VARCHAR(20) DEFAULT 'exact'"))
+            if "deadline_at" not in stage_cols:
+                conn.execute(text("ALTER TABLE application_stages ADD COLUMN deadline_at TIMESTAMP"))
+            conn.execute(text("UPDATE application_stages SET schedule_type = 'exact' WHERE schedule_type IS NULL OR schedule_type = ''"))
 
 
 def _ensure_default_group(engine) -> None:

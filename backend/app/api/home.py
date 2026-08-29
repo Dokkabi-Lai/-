@@ -14,6 +14,95 @@ from .deps import get_current_group, get_current_user
 router = APIRouter(prefix="/api/home", tags=["home"])
 
 
+def _as_date(value):
+    if isinstance(value, dt.datetime):
+        return value.date()
+    return value
+
+
+def _deadline_tone(days_left: int) -> str:
+    if days_left <= 1:
+        return "critical"
+    if days_left <= 3:
+        return "warning"
+    if days_left <= 7:
+        return "soon"
+    return "normal"
+
+
+def _deadline_label(days_left: int) -> str:
+    if days_left <= 0:
+        return "今天截止"
+    if days_left == 1:
+        return "明天截止"
+    return f"{days_left}天后截止"
+
+
+def _deadline_notifications(db: Session, user: User, group: Group, today: dt.date) -> list[dict]:
+    """聚合首页提醒：岗位申请截止 + 笔试截止，按紧急程度排序。"""
+    items = []
+    window_end = today + dt.timedelta(days=14)
+
+    closing_jobs = db.query(Job).filter(
+        Job.group_id == group.id,
+        Job.is_active.is_not(False),
+        Job.close_date.isnot(None),
+        Job.close_date >= today,
+        Job.close_date <= window_end,
+    ).order_by(Job.close_date).limit(30).all()
+    for job in closing_jobs:
+        target = _as_date(job.close_date)
+        days_left = (target - today).days
+        items.append({
+            "id": f"job-{job.id}",
+            "kind": "job_deadline",
+            "tone": _deadline_tone(days_left),
+            "priority": 0 if days_left <= 1 else 1 if days_left <= 3 else 2 if days_left <= 7 else 3,
+            "days_left": days_left,
+            "label": _deadline_label(days_left),
+            "target_date": target.isoformat(),
+            "company": job.company,
+            "title": job.title,
+            "meta": "岗位申请截止",
+            "action": "jobs",
+            "job_id": job.id,
+        })
+
+    deadline_start = dt.datetime.combine(today, dt.time.min)
+    deadline_end = dt.datetime.combine(window_end + dt.timedelta(days=1), dt.time.min)
+    exam_deadlines = db.query(ApplicationStage, Application).join(
+        Application, Application.id == ApplicationStage.application_id
+    ).filter(
+        Application.user_id == user.id,
+        ApplicationStage.stage == "笔试",
+        ApplicationStage.schedule_type == "deadline",
+        ApplicationStage.deadline_at.isnot(None),
+        ApplicationStage.status.notin_(["completed", "skipped"]),
+        ApplicationStage.deadline_at >= deadline_start,
+        ApplicationStage.deadline_at < deadline_end,
+    ).order_by(ApplicationStage.deadline_at).limit(30).all()
+    for stage, app in exam_deadlines:
+        target = _as_date(stage.deadline_at)
+        days_left = (target - today).days
+        items.append({
+            "id": f"exam-{stage.id}",
+            "kind": "exam_deadline",
+            "tone": _deadline_tone(days_left),
+            "priority": 0 if days_left <= 1 else 1 if days_left <= 3 else 2 if days_left <= 7 else 3,
+            "days_left": days_left,
+            "label": _deadline_label(days_left),
+            "target_date": target.isoformat(),
+            "company": app.company,
+            "title": app.title,
+            "meta": "笔试截止",
+            "action": "track",
+            "application_id": app.id,
+        })
+
+    items.sort(key=lambda item: (item["priority"], item["target_date"], item["title"]))
+    return items[:10]
+
+
 @router.get("")
 def home_feed(
     db: Session = Depends(get_db),
@@ -31,7 +120,7 @@ def home_feed(
         and_(
             ApplicationStage.scheduled_at.isnot(None),
             ApplicationStage.scheduled_at >= day_start,
-            ApplicationStage.scheduled_at <= day_end + dt.timedelta(days=1),
+            ApplicationStage.scheduled_at <= day_end,
         ),
     ).order_by(ApplicationStage.scheduled_at).all()
 
@@ -78,6 +167,7 @@ def home_feed(
         Application.status.notin_(["已淘汰", "已完成"]),
         Application.user_id == user.id,
     ).count()
+    notifications = _deadline_notifications(db, user, group, today)
 
     return {
         "stats": {
@@ -88,6 +178,8 @@ def home_feed(
             "rejected_count": rejected_count,
             "in_progress_count": in_progress_count,
             "new_today_count": new_today_count,
+            "urgent_count": sum(1 for item in notifications if item["tone"] == "critical"),
+            "deadline_count": len(notifications),
         },
         "group": {"id": group.id, "name": group.name},
         "job_activity_today": {
@@ -111,11 +203,13 @@ def home_feed(
                 "title": s.application.title if s.application else "",
                 "stage": s.stage,
                 "scheduled_at": s.scheduled_at.isoformat() if s.scheduled_at else None,
+                "schedule_type": s.schedule_type or "exact",
                 "location": s.location,
                 "form": s.form,
             }
             for s in today_stages
         ],
+        "notifications": notifications,
     }
 
 

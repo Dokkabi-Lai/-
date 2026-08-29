@@ -40,6 +40,7 @@ async function loadOffers() {
 function offerCard(app) {
   var offerStage = (app.stages || []).find(function(s) { return s.stage === "Offer"; });
   var offerDate = offerStage && offerStage.completed_at ? offerStage.completed_at.slice(0, 10) : "";
+  var offerNote = offerStage && (offerStage.notes || offerStage.feedback);
   return el("div", { class: "offer-card" },
     el("div", { class: "offer-card-header" },
       el("div", { class: "company-avatar lg" }, app.company.charAt(0)),
@@ -54,9 +55,9 @@ function offerCard(app) {
       ),
       el("div", { class: "offer-celebrate" }, "🎊")
     ),
-    offerStage && offerStage.feedback ? el("div", { class: "offer-feedback" },
+    offerNote ? el("div", { class: "offer-feedback" },
       el("div", { class: "text-sm muted" }, "Offer备注:" ),
-      el("div", { style: "white-space:pre-wrap", class: "text-sm mt-4" }, offerStage.feedback)
+      el("div", { style: "white-space:pre-wrap", class: "text-sm mt-4" }, offerNote)
     ) : null,
     el("div", { class: "offer-actions" },
       el("button", { class: "btn sm", onclick: function() { viewOfferDetail(app); } }, "查看详情"),
@@ -91,7 +92,7 @@ function viewOfferDetail(app) {
           el("span", { class: "stage-dot " + (s.status === "completed" ? "completed" : "") }),
           el("span", { class: "bold" }, s.stage),
           s.completed_at ? el("span", { class: "muted text-sm" }, " " + s.completed_at.slice(0, 10)) : null,
-          s.feedback ? el("div", { class: "text-sm muted", style: "margin-left:20px;white-space:pre-wrap" }, s.feedback) : null
+          (s.notes || (s.stage === "Offer" ? s.feedback : null)) ? el("div", { class: "text-sm muted", style: "margin-left:20px;white-space:pre-wrap" }, s.notes || s.feedback) : null
         );
       }))
     )

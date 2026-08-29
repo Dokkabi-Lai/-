@@ -1,11 +1,3 @@
-window.load_review = function() {
-  showPage("home");
-  setTimeout(function() {
-    var target = document.getElementById("home-dashboard");
-    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 120);
-};
-
 async function loadDashboard() {
   var box = document.getElementById("dash-funnel");
   if (!box) return;
@@ -35,16 +27,12 @@ async function loadDashboard() {
     }))));
     box.appendChild(charts);
 
-    var charts2 = el("div", { class: "chart-grid" });
-    var rejects = d.reject_by_stage || {};
-    var rejectItems = Object.keys(rejects).map(function(k) {
-      return { label: k, value: rejects[k], color: "#c2413b" };
-    });
-    charts2.appendChild(chartCard("淘汰发生在", rejectItems.length ? renderBars(rejectItems) : emptyChart("还没有淘汰记录")));
-    charts2.appendChild(chartCard("近 8 周投递量", renderColumns(d.weekly || [])));
-    box.appendChild(charts2);
+    var rhythm = el("div", { class: "chart-grid chart-grid-single" });
+    rhythm.appendChild(chartCard("近 8 周投递节奏", renderColumns(d.weekly || [])));
+    box.appendChild(rhythm);
   } catch(e) {
-    box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
+    box.innerHTML = "";
+    box.appendChild(el("div", { class: "card" }, "加载失败：" + e.message));
   }
 }
 
@@ -62,7 +50,7 @@ function emptyChart(text) {
 function renderFunnel(items) {
   var max = Math.max.apply(null, items.map(function(i) { return i.value; }).concat([1]));
   var wrap = el("div", { class: "funnel-visual" });
-  items.forEach(function(item, idx) {
+  items.forEach(function(item) {
     var pct = Math.max(28, Math.round(item.value / max * 100));
     wrap.appendChild(el("div", { class: "funnel-row" },
       el("div", { class: "funnel-label-col" }, item.label),
@@ -142,67 +130,4 @@ function renderColumns(weeks) {
     ));
   });
   return wrap;
-}
-
-async function loadReviews() {
-  var box = document.getElementById("review-list");
-  if (!box) return;
-  try {
-    var data = await API.get("/api/applications/reviews/all");
-    box.innerHTML = "";
-    box.appendChild(el("h3", { class: "card-title home-review-title" }, "面试记录"));
-    if (!data.length) {
-      box.appendChild(emptyState("还没有面试记录。在流程跟踪里给各阶段写反馈，会汇总到这里。"));
-      return;
-    }
-    var groups = {};
-    var order = [];
-    data.forEach(function(group) {
-      group.items.forEach(function(item) {
-        var key = group.company + " · " + item.title;
-        if (!groups[key]) { groups[key] = { company: group.company, title: item.title, items: [] }; order.push(key); }
-        groups[key].items.push(item);
-      });
-    });
-    order.forEach(function(key) { box.appendChild(reviewGroup(groups[key])); });
-  } catch(e) {
-    box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
-  }
-}
-
-function reviewGroup(group) {
-  return el("div", { class: "review-company-group" },
-    el("div", { class: "review-company-header" },
-      el("div", { class: "company-avatar" }, group.company.charAt(0)),
-      el("div", {},
-        el("h3", {}, group.company),
-        el("div", { class: "muted text-sm" }, group.title + " · " + group.items.length + " 条记录")
-      )
-    ),
-    el("div", { class: "review-items" },
-      ...group.items.map(function(item) { return reviewCard(item); })
-    )
-  );
-}
-
-function reviewCard(item) {
-  return el("div", { class: "review-card" },
-    el("div", { class: "review-card-header" },
-      el("div", { class: "review-card-title" },
-        el("span", { class: "chip sm" }, item.stage),
-        el("span", { class: "bold" }, item.title)
-      ),
-      el("div", { class: "review-card-meta muted text-sm" },
-        item.scheduled_at ? el("span", {}, item.scheduled_at.slice(0, 10)) : null,
-        item.form ? el("span", {}, item.form) : null,
-        item.location ? el("span", {}, item.location) : null
-      )
-    ),
-    el("div", { class: "review-card-body" },
-      el("div", { class: "review-content", style: "white-space:pre-wrap" }, item.feedback)
-    ),
-    item.notes ? el("div", { class: "review-card-notes" },
-      el("span", { class: "muted text-sm" }, "备注: " + item.notes)
-    ) : null
-  );
 }

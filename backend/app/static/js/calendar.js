@@ -1,12 +1,13 @@
 var calYear, calMonth;
-var typeLabels = { exam: "笔试", interview: "面试", other: "其他安排" };
-var typeColors = { exam: "#0f766e", interview: "#2563eb", other: "#b45309" };
+var typeLabels = { exam: "笔试", deadline: "笔试截止", interview: "面试", other: "其他安排" };
+var typeColors = { exam: "#0f766e", deadline: "#d97706", interview: "#2563eb", other: "#b45309" };
 var typeBgColors = {
   exam: "rgba(15,118,110,0.12)",
+  deadline: "rgba(217,119,6,0.14)",
   interview: "rgba(37,99,235,0.12)",
   other: "rgba(180,83,9,0.12)"
 };
-var _calVisibleTypes = { exam: true, interview: true, other: true };
+var _calVisibleTypes = { exam: true, deadline: true, interview: true, other: true };
 
 window.load_calendar = async function() {
   var now = new Date();
@@ -18,30 +19,62 @@ window.load_calendar = async function() {
 async function renderCalendarPage() {
   var page = document.getElementById("page-calendar");
   page.innerHTML = "";
-  page.appendChild(el("div", { class: "page-header" },
-    el("div", {},
-      el("h1", { class: "page-title" }, "日历"),
-      el("div", { class: "page-sub muted" }, "笔试与面试安排")
+  var shell = el("div", { class: "calendar-shell" });
+  shell.appendChild(el("section", { class: "calendar-hero" },
+    el("div", { class: "calendar-hero-copy" },
+      el("div", { class: "section-kicker" }, "TIMEBOX"),
+      el("h1", { class: "calendar-title" }, "日历"),
+      el("p", {}, "把固定时间和截止时间放进同一条清晰的节奏里。")
     ),
-    el("div", { class: "cal-nav" },
-      el("button", { class: "btn sm", onclick: function() { prevMonth(); } }, "‹"),
-      el("span", { class: "cal-month-label", id: "cal-label" }, calYear + "年" + calMonth + "月"),
-      el("button", { class: "btn sm", onclick: function() { nextMonth(); } }, "›"),
-      el("button", { class: "btn sm", onclick: function() { goToday(); } }, "今天")
+    el("div", { class: "calendar-hero-side" },
+      el("span", { class: "calendar-hero-label" }, "当前查看"),
+      el("div", { class: "cal-nav" },
+        el("button", { class: "btn sm calendar-nav-btn", "aria-label": "上个月", onclick: function() { prevMonth(); } }, "‹"),
+        el("span", { class: "cal-month-label", id: "cal-label" }, calYear + "年" + calMonth + "月"),
+        el("button", { class: "btn sm calendar-nav-btn", "aria-label": "下个月", onclick: function() { nextMonth(); } }, "›"),
+        el("button", { class: "btn sm calendar-today-btn", onclick: function() { goToday(); } }, "回到今天")
+      )
     )
   ));
 
-  page.appendChild(el("div", { class: "cal-stats", id: "cal-stats" }));
-  page.appendChild(el("div", { class: "cal-type-filters", id: "cal-type-filters" }));
-  page.appendChild(el("div", { class: "card" },
+  shell.appendChild(el("section", { class: "calendar-control-card" },
+    el("div", { class: "calendar-control-top" },
+      el("div", {},
+        el("div", { class: "section-kicker" }, "MONTH SIGNAL"),
+        el("h2", {}, "这个月的节奏"),
+        el("p", { class: "muted" }, "先看数量，再看哪一天值得留出完整时间。")
+      ),
+      el("div", { class: "cal-stats", id: "cal-stats" })
+    ),
+    el("div", { class: "calendar-filter-row" },
+      el("span", { class: "calendar-filter-label" }, "显示安排"),
+      el("div", { class: "cal-type-filters", id: "cal-type-filters" })
+    )
+  ));
+
+  var content = el("div", { class: "calendar-content-grid" });
+  content.appendChild(el("section", { class: "card cal-month-card" },
+    el("div", { class: "cal-card-head" },
+      el("div", {},
+        el("div", { class: "section-kicker" }, "MONTH VIEW"),
+        el("h2", {}, "月视图")
+      ),
+      el("span", { class: "cal-card-hint" }, "日程会按颜色区分")
+    ),
     el("div", { id: "cal-grid" }, el("div", { class: "loading" }, "加载中…"))
   ));
-  page.appendChild(el("div", { class: "card mt-16" },
-    el("div", { class: "card-header" },
-      el("h3", { class: "card-title" }, "本月安排")
+  content.appendChild(el("section", { class: "card cal-agenda-card" },
+    el("div", { class: "cal-card-head" },
+      el("div", {},
+        el("div", { class: "section-kicker" }, "AGENDA"),
+        el("h2", {}, "本月安排")
+      ),
+      el("span", { class: "cal-card-hint" }, "按日期排列")
     ),
     el("div", { id: "cal-events" }, el("div", { class: "loading" }, "加载中…"))
   ));
+  shell.appendChild(content);
+  page.appendChild(shell);
   await loadCalendarData();
 }
 
@@ -133,11 +166,12 @@ function renderCalGrid(events) {
         dayEvents.slice(0, 3).forEach(function(e) {
           var color = typeColors[e.type] || "#646a73";
           var bg = typeBgColors[e.type] || "var(--bg)";
-          var title = e.title.length > 8 ? e.title.slice(0, 8) + '…' : e.title;
-          eventsHtml += '<div class="cal-event" style="border-left-color:' + color + ';background:' + bg + '" title="' + e.title + '">' + title + '</div>';
+          var rawTitle = e.title || e.stage || "安排";
+          var title = rawTitle.length > 8 ? rawTitle.slice(0, 8) + '…' : rawTitle;
+          eventsHtml += '<div class="cal-event" style="--event-color:' + color + ';border-left-color:' + color + ';background:' + bg + '" title="' + calEscape(rawTitle) + '">' + calEscape(title) + '</div>';
         });
         if (dayEvents.length > 3) eventsHtml += '<div class="cal-more">+' + (dayEvents.length - 3) + '</div>';
-        html += '<div class="cal-cell' + (isToday ? ' cal-today' : '') + '"><div class="cal-day-num">' + dayCount + '</div>' + eventsHtml + '</div>';
+        html += '<div class="cal-cell' + (isToday ? ' cal-today' : '') + (dayEvents.length ? ' cal-has-events' : '') + '"><div class="cal-day-num">' + dayCount + '</div>' + eventsHtml + '</div>';
         dayCount++;
       }
     }
@@ -150,6 +184,12 @@ function renderCalGrid(events) {
   });
   html += '</div>';
   grid.innerHTML = html;
+}
+
+function calEscape(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function(ch) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
 }
 
 function renderEventList(events) {
@@ -173,13 +213,13 @@ function renderEventList(events) {
       el("div", { class: "event-title" }, e.title),
       el("div", { class: "event-meta" },
         el("span", { class: "chip sm", style: "color:" + color }, typeLabels[e.type] || e.stage || e.type),
-        e.time ? el("span", { class: "text-sm" }, e.time) : null,
+        e.type === "deadline" ? el("span", { class: "text-sm deadline-label" }, "截止前完成") : (e.time ? el("span", { class: "text-sm" }, e.time) : null),
         e.location ? el("span", { class: "text-sm" }, e.location) : null,
         e.form ? el("span", { class: "text-sm" }, e.form) : null
       )
     );
     box.appendChild(el("div", { class: "event-item" },
-      el("div", { class: "event-time-col" }, e.time ? e.time : ""),
+      el("div", { class: "event-time-col" }, e.type === "deadline" ? "截止" : (e.time ? e.time : "")),
       el("div", { class: "event-dot", style: "background:" + color }),
       infoContent
     ));

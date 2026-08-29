@@ -1,3 +1,4 @@
+import datetime as dt
 import hashlib
 import unittest
 
@@ -7,8 +8,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.auth import _SALT, hash_password, verify_password
 from app.api.deps import create_access_token
+from app.api.home import _deadline_notifications
 from app.config import get_settings
-from app.models import Base, Group, GroupMember, Job, User
+from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, User
 from app.services.excel_import_service import _upsert_jobs, import_job_items
 from app.services.group_service import active_membership, ensure_user_default_group
 
@@ -75,6 +77,56 @@ class JobUpsertTests(unittest.TestCase):
         self.assertEqual(len(source_ids), 2)
 
 
+class DeadlineNotificationTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_exam_deadline_is_prioritized_and_job_deadline_is_included(self):
+        today = dt.date.today()
+        user = User(username="deadline-user", email="deadline@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        group = Group(name="提醒测试组", owner_id=user.id)
+        self.db.add(group)
+        self.db.flush()
+        self.db.add(Job(
+            group_id=group.id,
+            source="manual",
+            source_id="deadline-job",
+            company="测试公司",
+            title="产品岗位",
+            close_date=dt.datetime.combine(today + dt.timedelta(days=3), dt.time.min),
+        ))
+        app = Application(
+            user_id=user.id,
+            company="笔试公司",
+            title="数据岗",
+            status="已投递",
+            current_stage="笔试",
+        )
+        self.db.add(app)
+        self.db.flush()
+        self.db.add(ApplicationStage(
+            application_id=app.id,
+            stage="笔试",
+            status="current",
+            schedule_type="deadline",
+            deadline_at=dt.datetime.combine(today + dt.timedelta(days=1), dt.time(23, 59)),
+        ))
+        self.db.commit()
+
+        items = _deadline_notifications(self.db, user, group, today)
+
+        self.assertEqual(items[0]["kind"], "exam_deadline")
+        self.assertEqual(items[0]["days_left"], 1)
+        self.assertIn("job_deadline", {item["kind"] for item in items})
+
+
 class GroupMembershipTests(unittest.TestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
@@ -98,4 +150,3 @@ class GroupMembershipTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

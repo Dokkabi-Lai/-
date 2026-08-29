@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
@@ -13,7 +13,9 @@ from .deps import get_current_group, get_current_user
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 
-def _stage_kind(stage: str) -> str:
+def _stage_kind(stage: str, schedule_type: str = "exact") -> str:
+    if schedule_type == "deadline":
+        return "deadline"
     if stage == "笔试":
         return "exam"
     if stage in ("一面", "二面", "HR面"):
@@ -54,6 +56,16 @@ def today(
         )
     ).order_by(ApplicationStage.scheduled_at).all()
 
+    deadline_stages = db.query(ApplicationStage).join(Application).filter(
+        Application.user_id == user.id,
+        ApplicationStage.stage == "笔试",
+        ApplicationStage.schedule_type == "deadline",
+        ApplicationStage.deadline_at.isnot(None),
+        ApplicationStage.status.notin_(["completed", "skipped"]),
+        ApplicationStage.deadline_at >= day_start,
+        ApplicationStage.deadline_at <= day_end,
+    ).order_by(ApplicationStage.deadline_at).all()
+
     return {
         "date": today_date.isoformat(),
         "closing_jobs": [
@@ -68,11 +80,24 @@ def today(
                 "company": s.application.company if s.application else "",
                 "title": s.application.title if s.application else "",
                 "stage": s.stage,
+                "schedule_type": s.schedule_type or "exact",
                 "scheduled_at": s.scheduled_at.isoformat() if s.scheduled_at else None,
                 "location": s.location,
                 "form": s.form,
             }
             for s in today_stages
+        ],
+        "deadline_schedules": [
+            {
+                "id": s.id,
+                "application_id": s.application_id,
+                "company": s.application.company if s.application else "",
+                "title": s.application.title if s.application else "",
+                "stage": s.stage,
+                "schedule_type": "deadline",
+                "deadline_at": s.deadline_at.isoformat() if s.deadline_at else None,
+            }
+            for s in deadline_stages
         ],
     }
 
@@ -89,24 +114,39 @@ def month_view(year: int, month: int, db: Session = Depends(get_db), user: User 
     events = []
     stage_start = dt.datetime.combine(start, dt.time.min)
     stage_end = dt.datetime.combine(end, dt.time.min)
-    for s in db.query(ApplicationStage).join(Application).filter(
+    stages = db.query(ApplicationStage).join(Application).filter(
         Application.user_id == user.id,
-        and_(
-            ApplicationStage.scheduled_at.isnot(None),
-            ApplicationStage.scheduled_at >= stage_start,
-            ApplicationStage.scheduled_at < stage_end,
+        or_(
+            and_(
+                ApplicationStage.scheduled_at.isnot(None),
+                ApplicationStage.scheduled_at >= stage_start,
+                ApplicationStage.scheduled_at < stage_end,
+            ),
+            and_(
+                ApplicationStage.stage == "笔试",
+                ApplicationStage.schedule_type == "deadline",
+                ApplicationStage.deadline_at.isnot(None),
+                ApplicationStage.deadline_at >= stage_start,
+                ApplicationStage.deadline_at < stage_end,
+            ),
         )
-    ):
+    ).all()
+    for s in stages:
         app = s.application
+        event_at = s.deadline_at if s.schedule_type == "deadline" else s.scheduled_at
+        if not event_at:
+            continue
         company = app.company if app else ""
         events.append({
-            "date": s.scheduled_at.date().isoformat(),
-            "type": _stage_kind(s.stage),
+            "date": event_at.date().isoformat(),
+            "type": _stage_kind(s.stage, s.schedule_type or "exact"),
             "stage": s.stage,
             "title": f"{company} - {s.stage}",
             "id": s.id,
             "application_id": s.application_id,
-            "time": s.scheduled_at.strftime("%H:%M") if s.scheduled_at else None,
+            "time": event_at.strftime("%H:%M") if s.schedule_type != "deadline" else None,
+            "schedule_type": s.schedule_type or "exact",
+            "deadline_at": s.deadline_at.isoformat() if s.deadline_at else None,
             "location": s.location,
             "form": s.form,
             "url": s.notes if s.notes and s.notes.startswith("http") else None,
@@ -128,14 +168,30 @@ def month_stats(year: int, month: int, db: Session = Depends(get_db), user: User
     # 本月所有有时间安排的阶段（按用户过滤）
     all_stages = db.query(ApplicationStage).join(Application).filter(
         Application.user_id == user.id,
-        ApplicationStage.scheduled_at.isnot(None),
-        ApplicationStage.scheduled_at >= start,
-        ApplicationStage.scheduled_at < end,
+        or_(
+            and_(
+                ApplicationStage.scheduled_at.isnot(None),
+                ApplicationStage.scheduled_at >= start,
+                ApplicationStage.scheduled_at < end,
+            ),
+            and_(
+                ApplicationStage.stage == "笔试",
+                ApplicationStage.schedule_type == "deadline",
+                ApplicationStage.deadline_at.isnot(None),
+                ApplicationStage.deadline_at >= start,
+                ApplicationStage.deadline_at < end,
+            ),
+        ),
     ).all()
 
     total = len(all_stages)
     completed = len([s for s in all_stages if s.status == "completed"])
-    upcoming = len([s for s in all_stages if s.scheduled_at and s.scheduled_at > now and s.status != "completed"])
+    upcoming = len([
+        s for s in all_stages
+        if (s.deadline_at if s.schedule_type == "deadline" else s.scheduled_at)
+        and (s.deadline_at if s.schedule_type == "deadline" else s.scheduled_at) > now
+        and s.status != "completed"
+    ])
 
     # 按类型统计
     by_stage = {}

@@ -16,12 +16,23 @@ router = APIRouter(prefix="/api/applications", tags=["applications"])
 STAGES = ["投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"]
 
 
+def _parse_datetime(value, label: str) -> Optional[dt.datetime]:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(value).replace("Z", ""))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{label}格式不正确")
+
+
 def _serialize_stage(s: ApplicationStage) -> dict:
     return {
         "id": s.id,
         "stage": s.stage,
         "status": s.status,
         "scheduled_at": s.scheduled_at.isoformat() if s.scheduled_at else None,
+        "schedule_type": s.schedule_type or "exact",
+        "deadline_at": s.deadline_at.isoformat() if s.deadline_at else None,
         "completed_at": s.completed_at.isoformat() if s.completed_at else None,
         "location": s.location,
         "form": s.form,
@@ -301,7 +312,27 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
             setattr(stage, field, body[field])
 
     if "scheduled_at" in body:
-        stage.scheduled_at = dt.datetime.fromisoformat(body["scheduled_at"]) if body["scheduled_at"] else None
+        stage.scheduled_at = _parse_datetime(body["scheduled_at"], "固定时间")
+
+    if "deadline_at" in body:
+        stage.deadline_at = _parse_datetime(body["deadline_at"], "截止时间")
+
+    if "schedule_type" in body:
+        schedule_type = body.get("schedule_type") or "exact"
+        if schedule_type not in ("exact", "deadline"):
+            raise HTTPException(400, "笔试时间类型不正确")
+        stage.schedule_type = schedule_type
+    elif stage_name == "笔试" and body.get("deadline_at"):
+        # 兼容只提交截止时间的旧客户端。
+        stage.schedule_type = "deadline"
+
+    if stage_name != "笔试":
+        stage.schedule_type = "exact"
+        stage.deadline_at = None
+    elif stage.schedule_type == "deadline":
+        stage.scheduled_at = None
+    else:
+        stage.deadline_at = None
 
     if "completed_at" in body:
         stage.completed_at = dt.datetime.fromisoformat(body["completed_at"]) if body["completed_at"] else None

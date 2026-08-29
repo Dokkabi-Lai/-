@@ -105,6 +105,24 @@ function daysLeft(dateStr) {
   return Math.round((d - today) / 86400000);
 }
 
+function stageScheduleLabel(stageData) {
+  if (!stageData) return "";
+  if (stageData.schedule_type === "deadline" && stageData.deadline_at) {
+    return "截止 " + stageData.deadline_at.slice(5, 16).replace("T", " ");
+  }
+  if (stageData.scheduled_at) {
+    return stageData.scheduled_at.slice(5, 16).replace("T", " ");
+  }
+  return "";
+}
+
+function formatNotificationDays(item) {
+  if (!item) return "—";
+  if (item.days_left <= 0) return "今天";
+  if (item.days_left === 1) return "明天";
+  return item.days_left + "天";
+}
+
 function deadlineTag(dateStr) {
   if (!dateStr) return el("span", { class: "tag" }, "长期");
   const left = daysLeft(dateStr);

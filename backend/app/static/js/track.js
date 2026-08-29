@@ -1,6 +1,9 @@
 var STAGES = ["投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"];
 var _trackFilter = "all";
-var _trackGroupBy = "company"; // company or flat
+var _trackPagerIndex = 0;
+var _trackPagerData = [];
+var _trackQuery = "";
+var _trackApplications = null;
 
 window.load_track = async function() {
   var page = document.getElementById("page-track");
@@ -25,6 +28,19 @@ window.load_track = async function() {
       el("button", { class: "tab-btn" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
       el("button", { class: "tab-btn" + (_trackFilter === "completed" ? " active" : ""), "data-filter": "completed", onclick: function() { setTrackFilter("completed"); } }, "已完成")
     ),
+    el("div", { class: "track-search" },
+      el("span", { class: "track-search-icon", "aria-hidden": "true" }, "⌕"),
+      el("input", {
+        class: "input track-search-input", id: "track-search", type: "search",
+        placeholder: "搜索公司、岗位或阶段", value: _trackQuery,
+        autocomplete: "off", "aria-label": "搜索流程",
+        oninput: function(event) {
+          _trackQuery = event.target.value;
+          _trackPagerIndex = 0;
+          if (_trackApplications) renderTrackApplications(_trackApplications);
+        }
+      })
+    ),
     el("span", { class: "muted text-sm", id: "track-count" })
   ));
 
@@ -34,27 +50,58 @@ window.load_track = async function() {
 
 function setTrackFilter(f) {
   _trackFilter = f;
+  _trackPagerIndex = 0;
   document.querySelectorAll("#track-tabs .tab-btn").forEach(function(b) {
     b.classList.toggle("active", b.getAttribute("data-filter") === f);
   });
-  loadApplications();
+  if (_trackApplications) renderTrackApplications(_trackApplications);
+  else loadApplications();
 }
 
 async function loadApplications() {
   var box = document.getElementById("track-list");
   if (!box) return;
   try {
-    var data = await API.get("/api/applications");
+    _trackApplications = await API.get("/api/applications");
+    renderTrackApplications(_trackApplications);
+  } catch(e) {
+    box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
+  }
+}
+
+function renderTrackApplications(allData) {
+  var box = document.getElementById("track-list");
+  if (!box) return;
+  var data = (allData || []).slice();
     if (_trackFilter === "active") data = data.filter(function(a) { return a.status !== "已淘汰" && a.status !== "已完成"; });
     if (_trackFilter === "rejected") data = data.filter(function(a) { return a.status === "已淘汰"; });
     if (_trackFilter === "completed") data = data.filter(function(a) { return a.status === "已完成"; });
     if (_trackFilter === "offers") data = data.filter(function(a) { return a.status === "已完成"; });
 
+    var query = (_trackQuery || "").trim().toLowerCase();
+    if (query) {
+      data = data.filter(function(app) {
+        var stageText = (app.stages || []).map(function(stage) {
+          return [stage.stage, stage.status, stage.notes].filter(Boolean).join(" ");
+        }).join(" ");
+        return [app.company, app.title, app.channel, app.status, app.current_stage, app.rejected_stage, app.notes, stageText]
+          .filter(Boolean).join(" ").toLowerCase().includes(query);
+      });
+    }
+
     document.getElementById("track-count").textContent = data.length + " 条";
     box.innerHTML = "";
     if (!data.length) {
-      box.appendChild(emptyState(_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！" : "暂无投递记录"));
+      var emptyText = query ? "没有匹配的岗位，换个关键词试试" : (_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！" : "暂无投递记录");
+      box.appendChild(emptyState(emptyText));
       return;
+    }
+
+    var focusId = window._trackFocusId;
+    window._trackFocusId = null;
+    if (focusId) {
+      var focusIndex = data.findIndex(function(app) { return String(app.id) === String(focusId); });
+      if (focusIndex >= 0) _trackPagerIndex = focusIndex;
     }
 
     if (_trackFilter === "offers") {
@@ -64,38 +111,84 @@ async function loadApplications() {
           el("div", { class: "offer-stat-label" }, "Offer 数")
         )
       ));
-      data.forEach(function(app) {
-        box.appendChild(typeof offerCard === "function" ? offerCard(app) : appCard(app));
-      });
+      box.appendChild(renderTrackPager(data, function(app) {
+        return typeof offerCard === "function" ? offerCard(app) : appCard(app);
+      }));
       return;
     }
 
-    var groups = {};
-    var order = [];
-    data.forEach(function(app) {
-      if (!groups[app.company]) { groups[app.company] = []; order.push(app.company); }
-      groups[app.company].push(app);
-    });
-
-    order.forEach(function(company) {
-      box.appendChild(trackCompanyGroup(company, groups[company]));
-    });
-  } catch(e) {
-    box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
-  }
+    box.appendChild(renderTrackPager(data, appCard));
 }
 
-function trackCompanyGroup(company, apps) {
-  var group = el("div", { class: "track-company-group" });
-  group.appendChild(el("div", { class: "track-company-header" },
-    el("div", { class: "company-avatar sm" }, company.charAt(0)),
-    el("div", { class: "track-company-name" }, company),
-    el("span", { class: "badge" }, apps.length)
+function renderTrackPager(data, renderer) {
+  _trackPagerData = data || [];
+  if (_trackPagerIndex < 0 || _trackPagerIndex >= _trackPagerData.length) _trackPagerIndex = 0;
+
+  var pager = el("section", { class: "track-pager" });
+  var identity = el("div", { class: "track-pager-identity" });
+  var counter = el("span", { class: "track-pager-counter" });
+  var cardWrap = el("div", { class: "track-pager-card" });
+  var dots = el("div", { class: "track-pager-dots", "aria-label": "岗位分页" });
+  var prev = el("button", { class: "btn sm track-pager-btn", type: "button", "aria-label": "上一个岗位", onclick: function() { move(-1); } }, "← 上一个");
+  var next = el("button", { class: "btn sm primary track-pager-btn", type: "button", "aria-label": "下一个岗位", onclick: function() { move(1); } }, "下一个 →");
+
+  pager.appendChild(el("div", { class: "track-pager-head" },
+    el("div", {},
+      el("div", { class: "section-kicker" }, "ONE ROLE AT A TIME"),
+      identity
+    ),
+    counter
   ));
-  apps.forEach(function(app) {
-    group.appendChild(appCard(app));
-  });
-  return group;
+  pager.appendChild(cardWrap);
+  pager.appendChild(el("div", { class: "track-pager-foot" },
+    prev,
+    dots,
+    next
+  ));
+
+  function move(step) {
+    var target = _trackPagerIndex + step;
+    if (target < 0 || target >= _trackPagerData.length) return;
+    _trackPagerIndex = target;
+    paint(step > 0 ? "next" : "prev");
+  }
+
+  function paint(direction) {
+    var app = _trackPagerData[_trackPagerIndex];
+    if (!app) return;
+    identity.textContent = (app.company || "未命名公司") + " · " + (app.title || "未命名岗位");
+    counter.textContent = "第 " + (_trackPagerIndex + 1) + " / " + _trackPagerData.length + " 个岗位";
+    prev.disabled = _trackPagerIndex === 0;
+    next.disabled = _trackPagerIndex === _trackPagerData.length - 1;
+    cardWrap.innerHTML = "";
+    var card = renderer(app);
+    if (card) cardWrap.appendChild(card);
+    cardWrap.classList.remove("pager-swap-next", "pager-swap-prev");
+    if (direction) {
+      void cardWrap.offsetWidth;
+      cardWrap.classList.add(direction === "next" ? "pager-swap-next" : "pager-swap-prev");
+    }
+
+    dots.innerHTML = "";
+    var maxDots = 7;
+    var start = Math.max(0, Math.min(_trackPagerIndex - 3, _trackPagerData.length - maxDots));
+    var end = Math.min(_trackPagerData.length, start + maxDots);
+    if (start > 0) dots.appendChild(el("span", { class: "track-pager-ellipsis" }, "···"));
+    for (var i = start; i < end; i++) {
+      dots.appendChild(el("button", {
+        class: "track-pager-dot" + (i === _trackPagerIndex ? " active" : ""),
+        type: "button",
+        title: (_trackPagerData[i].company || "岗位") + " · " + (_trackPagerData[i].title || ""),
+        "aria-label": "第 " + (i + 1) + " 个岗位",
+        onclick: function(index) { return function() { _trackPagerIndex = index; paint(); }; }(i)
+      }, String(i + 1)));
+    }
+    if (end < _trackPagerData.length) dots.appendChild(el("span", { class: "track-pager-ellipsis" }, "···"));
+  }
+
+  // 点击页码时不需要区分滑动方向，重新绘制即可。
+  paint();
+  return pager;
 }
 
 function appCard(app) {
@@ -108,12 +201,14 @@ function appCard(app) {
   var nextIdx = currentIdx + 1;
   var nextStage = nextIdx < STAGES.length ? STAGES[nextIdx] : null;
 
-  var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : "") });
+  var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : ""), "data-app-id": app.id });
 
   // 头部：岗位信息 + 操作
   card.appendChild(el("div", { class: "pipeline-header" },
     el("div", { class: "pipeline-info" },
+      el("div", { class: "company-avatar sm pipeline-avatar" }, (app.company || "?").charAt(0)),
       el("div", {},
+        el("div", { class: "pipeline-company" }, app.company),
         el("div", { class: "pipeline-title" }, app.title),
         el("div", { class: "pipeline-meta" },
           app.channel ? el("span", { class: "chip sm" }, app.channel) : null,
@@ -148,8 +243,7 @@ function appCard(app) {
       el("div", { class: "stage-dot " + statusClass }),
       el("div", { class: "stage-label " + statusClass }, stageName),
       statusText ? el("div", { class: "stage-status-text " + statusClass }, statusText) : null,
-      stageData.scheduled_at ? el("div", { class: "stage-time" }, stageData.scheduled_at.slice(5, 16).replace("T", " ")) : null,
-      stageData.feedback ? el("div", { class: "stage-has-review" }, "📝") : null
+      stageScheduleLabel(stageData) ? el("div", { class: "stage-time" }, stageScheduleLabel(stageData)) : null
     );
     stageEl.onclick = function(e) { e.stopPropagation(); showStageEditor(app, stageName, stageData); };
     pipeline.appendChild(stageEl);
@@ -209,7 +303,7 @@ function showOfferCelebration(app) {
       var note = val("offer-note");
       if (note) {
         try {
-          await API.patch("/api/applications/" + app.id + "/stage/Offer", { feedback: note });
+          await API.patch("/api/applications/" + app.id + "/stage/Offer", { notes: note });
         } catch(e) {}
       }
       closeModal();
@@ -256,6 +350,27 @@ async function restoreApp(id) {
 
 function showStageEditor(app, stageName, stageData) {
   var stageIdx = STAGES.indexOf(stageName);
+  var isExam = stageName === "笔试";
+  var scheduleType = stageData.schedule_type || (stageData.deadline_at ? "deadline" : "exact");
+  var exactTimeInput = el("input", {
+    class: "input", id: "se-time", type: "datetime-local",
+    value: (stageData.scheduled_at || "").slice(0, 16)
+  });
+  var exactTimeRow = formRow(isExam ? "固定开始时间" : "安排时间（同步日历）", exactTimeInput);
+  exactTimeRow.id = "se-exact-time-row";
+  var deadlineTimeInput = el("input", {
+    class: "input", id: "se-deadline", type: "datetime-local",
+    value: (stageData.deadline_at || "").slice(0, 16)
+  });
+  var deadlineTimeRow = formRow("最晚完成时间", deadlineTimeInput);
+  deadlineTimeRow.id = "se-deadline-time-row";
+  var scheduleTypeSelect = el("select", { class: "select", id: "se-schedule-type" },
+    el("option", { value: "exact", selected: scheduleType === "exact" ? true : undefined }, "固定时间 · 到点参加"),
+    el("option", { value: "deadline", selected: scheduleType === "deadline" ? true : undefined }, "截止时间 · 在此之前完成")
+  );
+  var scheduleModeRow = formRow("笔试时间类型", scheduleTypeSelect);
+
+  var timeFields = isExam ? [scheduleModeRow, exactTimeRow, deadlineTimeRow] : [exactTimeRow];
   var body = el("div", {},
     el("div", { class: "stage-editor-header" },
       el("div", { class: "company-avatar sm" }, app.company.charAt(0)),
@@ -270,7 +385,7 @@ function showStageEditor(app, stageName, stageData) {
       el("option", { value: "completed", selected: stageData.status === "completed" ? true : undefined }, "已通过"),
       el("option", { value: "skipped", selected: stageData.status === "skipped" ? true : undefined }, "未通过/跳过")
     )),
-    formRow("安排时间（同步日历）", el("input", { class: "input", id: "se-time", type: "datetime-local", value: (stageData.scheduled_at || "").slice(0, 16) })),
+    ...timeFields,
     formRow("形式", el("select", { class: "select", id: "se-form" },
       el("option", { value: "" }, "请选择"),
       el("option", { value: "现场", selected: stageData.form === "现场" ? true : undefined }, "现场"),
@@ -278,22 +393,31 @@ function showStageEditor(app, stageName, stageData) {
       el("option", { value: "电话", selected: stageData.form === "电话" ? true : undefined }, "电话")
     )),
     formRow("地点/会议链接", el("input", { class: "input", id: "se-loc", value: stageData.location || "", placeholder: "如: 腾讯大厦B1 / 腾讯会议xxx" })),
-    formRow("备注", el("textarea", { class: "textarea", id: "se-notes", placeholder: "面试官信息、准备材料等" }, stageData.notes || "")),
-    el("div", { class: "form-divider" }),
-    el("h4", { class: "mt-16 mb-8" }, "📝 面试反馈 / 复盘"),
-    el("textarea", { class: "textarea lg", id: "se-feedback", placeholder: "面试题目、自己的表现、改进点、面试官反馈等...\n\n写下来帮助后续面试复盘！" }, stageData.feedback || "")
+    formRow("备注", el("textarea", { class: "textarea", id: "se-notes", placeholder: "准备材料、注意事项等" }, stageData.notes || ""))
   );
+
+  function syncExamTimeFields() {
+    if (!isExam) return;
+    var mode = scheduleTypeSelect.value || "exact";
+    exactTimeRow.style.display = mode === "exact" ? "" : "none";
+    deadlineTimeRow.style.display = mode === "deadline" ? "" : "none";
+  }
+  if (isExam) {
+    scheduleTypeSelect.addEventListener("change", syncExamTimeFields);
+    syncExamTimeFields();
+  }
 
   var buttons = [
     el("button", { class: "btn primary", onclick: async function() {
       try {
         await API.patch("/api/applications/" + app.id + "/stage/" + encodeURIComponent(stageName), {
           status: val("se-status"),
-          scheduled_at: val("se-time") || null,
+          schedule_type: isExam ? (val("se-schedule-type") || "exact") : "exact",
+          scheduled_at: isExam && val("se-schedule-type") === "deadline" ? null : (val("se-time") || null),
+          deadline_at: isExam && val("se-schedule-type") === "deadline" ? (val("se-deadline") || null) : null,
           form: val("se-form") || null,
           location: val("se-loc") || null,
-          notes: val("se-notes") || null,
-          feedback: val("se-feedback") || null
+          notes: val("se-notes") || null
         });
         toast("已保存");
         closeModal();
@@ -340,7 +464,7 @@ function editApplication(app) {
 }
 
 async function deleteApplication(id) {
-  if (!confirm("确认删除此投递记录？所有阶段和复盘数据都将丢失。")) return;
+  if (!confirm("确认删除此投递记录？所有阶段记录都将丢失。")) return;
   await API.del("/api/applications/" + id);
   toast("已删除");
   loadApplications();
