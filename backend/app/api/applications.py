@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
-from sqlalchemy.orm import Session, contains_eager, selectinload
+from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
 from .deps import get_current_group, get_current_user
@@ -41,13 +41,14 @@ def _serialize_stage(s: ApplicationStage) -> dict:
     }
 
 
-def _serialize_app(a: Application) -> dict:
+def _serialize_app(a: Application, stages: list[ApplicationStage] | None = None) -> dict:
     # 按 STAGES 顺序排列阶段
-    stage_map = {s.stage: s for s in (a.stages or [])}
+    stage_rows = a.stages if stages is None else stages
+    stage_map = {s.stage: s for s in (stage_rows or [])}
     ordered_stages = [_serialize_stage(stage_map[name]) for name in STAGES if name in stage_map]
     # 追加不在 STAGES 列表中的阶段（容错）
     known = set(STAGES)
-    for s in (a.stages or []):
+    for s in (stage_rows or []):
         if s.stage not in known:
             ordered_stages.append(_serialize_stage(s))
     return {
@@ -107,19 +108,22 @@ def create_application(
     db.add(app)
     db.flush()  # 获取 app.id
 
-    # 创建 7 个阶段记录
+    # 创建 7 个阶段记录。把阶段对象保留在内存中，提交后直接序列化，
+    # 避免远程 PostgreSQL 再执行 refresh + lazy-load 的往返查询。
+    stages = []
     for i, stage_name in enumerate(STAGES):
         stage = ApplicationStage(
             application_id=app.id,
             stage=stage_name,
             status="completed" if i == 0 else "pending",
+            schedule_type="exact",
             completed_at=dt.datetime.now() if i == 0 else None,
         )
-        db.add(stage)
+        stages.append(stage)
+    db.add_all(stages)
 
     db.commit()
-    db.refresh(app)
-    return _serialize_app(app)
+    return _serialize_app(app, stages)
 
 
 # GET /api/applications - 获取所有投递记录
@@ -255,7 +259,7 @@ def _weekly_counts(apps: list[Application]) -> list[dict]:
 @router.get("/{app_id}")
 def get_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取单条投递详情，包含所有阶段。"""
-    app = db.query(Application).options(selectinload(Application.stages)).filter(
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
         Application.id == app_id, Application.user_id == user.id
     ).first()
     if not app:
@@ -267,7 +271,9 @@ def get_application(app_id: int, db: Session = Depends(get_db), user: User = Dep
 @router.patch("/{app_id}")
 def update_application(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新投递记录基本信息。"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
     for field in ("company", "title", "channel", "notes", "applied_at"):
@@ -284,7 +290,6 @@ def update_application(app_id: int, body: dict, db: Session = Depends(get_db), u
         elif val is not None:
             setattr(app, field, val)
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)
 
 
@@ -304,14 +309,13 @@ def delete_application(app_id: int, db: Session = Depends(get_db), user: User = 
 @router.patch("/{app_id}/stage/{stage_name}")
 def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新某个阶段的信息。"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
 
-    stage = db.query(ApplicationStage).filter(
-        ApplicationStage.application_id == app_id,
-        ApplicationStage.stage == stage_name,
-    ).first()
+    stage = next((item for item in (app.stages or []) if item.stage == stage_name), None)
     if not stage:
         raise HTTPException(404, f"阶段 '{stage_name}' 不存在")
 
@@ -354,7 +358,6 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
         _sync_current_stage(app, db)
 
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)
 
 
@@ -362,7 +365,9 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
 @router.post("/{app_id}/advance")
 def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """推进到下一阶段：将当前阶段标记为 completed，下一个阶段设为 current。"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
 
@@ -388,7 +393,6 @@ def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depen
         app.status = "已完成"
         app.current_stage = "Offer"
         db.commit()
-        db.refresh(app)
         return _serialize_app(app)
 
     # 将当前阶段标记为 completed
@@ -405,7 +409,6 @@ def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depen
 
     app.current_stage = next_name
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)
 
 
@@ -432,7 +435,9 @@ def _sync_current_stage(app: Application, db: Session):
 @router.post("/{app_id}/rollback")
 def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """回退到指定阶段：将该阶段及后续阶段全部重置为 pending。"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
 
@@ -466,46 +471,41 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
         app.rejected_stage = None
 
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)
 
 
 @router.post("/{app_id}/reject")
 def reject_application(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """标记投递为已淘汰"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
     app.status = "已淘汰"
     app.rejected_stage = body.get("stage", app.current_stage)
     # 将被淘汰的阶段标记为 skipped
-    stage = db.query(ApplicationStage).filter(
-        ApplicationStage.application_id == app_id,
-        ApplicationStage.stage == app.rejected_stage,
-    ).first()
+    stage = next((item for item in (app.stages or []) if item.stage == app.rejected_stage), None)
     if stage:
         stage.status = "skipped"
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)
 
 
 @router.post("/{app_id}/restore")
 def restore_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """恢复已淘汰的投递"""
-    app = db.query(Application).filter(Application.id == app_id, Application.user_id == user.id).first()
+    app = db.query(Application).options(joinedload(Application.stages)).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
     if not app:
         raise HTTPException(404, "投递记录不存在")
     old_stage = app.rejected_stage
     app.status = "进行中"
     app.rejected_stage = None
     if old_stage:
-        stage = db.query(ApplicationStage).filter(
-            ApplicationStage.application_id == app_id,
-            ApplicationStage.stage == old_stage,
-        ).first()
+        stage = next((item for item in (app.stages or []) if item.stage == old_stage), None)
         if stage:
             stage.status = "pending"
     db.commit()
-    db.refresh(app)
     return _serialize_app(app)

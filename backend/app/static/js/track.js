@@ -69,6 +69,41 @@ async function loadApplications() {
   }
 }
 
+// 保存操作的接口会返回完整投递记录。直接更新本地卡片，避免每次操作后
+// 再请求整份投递列表，尤其适合远程 PostgreSQL 和手机网络。
+function syncTrackApplication(updated) {
+  if (!updated) return;
+  if (!_trackApplications) {
+    loadApplications();
+    return;
+  }
+  var index = _trackApplications.findIndex(function(item) {
+    return String(item.id) === String(updated.id);
+  });
+  if (index >= 0) _trackApplications[index] = updated;
+  else _trackApplications.unshift(updated);
+  window._trackFocusId = updated.id;
+  renderTrackApplications(_trackApplications);
+  markApplicationViewsStale();
+}
+
+function removeTrackApplication(appId) {
+  if (_trackApplications) {
+    _trackApplications = _trackApplications.filter(function(item) {
+      return String(item.id) !== String(appId);
+    });
+    renderTrackApplications(_trackApplications);
+  }
+  markApplicationViewsStale();
+}
+
+function markApplicationViewsStale() {
+  if (typeof _renderedPages === "undefined") return;
+  ["home", "calendar", "profile", "offers"].forEach(function(page) {
+    _renderedPages[page] = false;
+  });
+}
+
 function renderTrackApplications(allData) {
   var box = document.getElementById("track-list");
   if (!box) return;
@@ -285,7 +320,7 @@ async function advanceStage(appId) {
     } else {
       toast("✅ 已通过，进入下一环节");
     }
-    loadApplications();
+    syncTrackApplication(r);
   } catch(e) { toast("操作失败: " + e.message); }
 }
 
@@ -300,15 +335,16 @@ function showOfferCelebration(app) {
   );
   showModal("🎉 恭喜！", body, [
     el("button", { class: "btn primary", onclick: async function() {
+      var updated = app;
       var note = val("offer-note");
       if (note) {
         try {
-          await API.patch("/api/applications/" + app.id + "/stage/Offer", { notes: note });
+          updated = await API.patch("/api/applications/" + app.id + "/stage/Offer", { notes: note });
         } catch(e) {}
       }
       closeModal();
       toast("🎊 已存入Offer库！");
-      loadApplications();
+      syncTrackApplication(updated);
     } }, "🎊 存入Offer库"),
     el("button", { class: "btn", onclick: closeModal }, "稍后填写")
   ]);
@@ -316,9 +352,9 @@ function showOfferCelebration(app) {
 
 function rejectAtStage(app, stage) {
   // 直接淘汰，无需弹窗
-  API.post("/api/applications/" + app.id + "/reject", { stage: stage }).then(function() {
+  API.post("/api/applications/" + app.id + "/reject", { stage: stage }).then(function(updated) {
     toast("❌ 已标记在「" + stage + "」淘汰");
-    loadApplications();
+    syncTrackApplication(updated);
   }).catch(function(e) { toast("操作失败"); });
 }
 
@@ -333,19 +369,19 @@ function showRejectDialog(app) {
   );
   showModal("标记淘汰", body, [
     el("button", { class: "btn danger", onclick: async function() {
-      await API.post("/api/applications/" + app.id + "/reject", { stage: val("reject-stage") });
+      var updated = await API.post("/api/applications/" + app.id + "/reject", { stage: val("reject-stage") });
       toast("已标记淘汰");
       closeModal();
-      loadApplications();
+      syncTrackApplication(updated);
     } }, "确认淘汰"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
 }
 
 async function restoreApp(id) {
-  await API.post("/api/applications/" + id + "/restore");
+  var updated = await API.post("/api/applications/" + id + "/restore");
   toast("♻️ 已恢复");
-  loadApplications();
+  syncTrackApplication(updated);
 }
 
 function showStageEditor(app, stageName, stageData) {
@@ -410,7 +446,7 @@ function showStageEditor(app, stageName, stageData) {
   var buttons = [
     el("button", { class: "btn primary", onclick: async function() {
       try {
-        await API.patch("/api/applications/" + app.id + "/stage/" + encodeURIComponent(stageName), {
+        var updated = await API.patch("/api/applications/" + app.id + "/stage/" + encodeURIComponent(stageName), {
           status: val("se-status"),
           schedule_type: isExam ? (val("se-schedule-type") || "exact") : "exact",
           scheduled_at: isExam && val("se-schedule-type") === "deadline" ? null : (val("se-time") || null),
@@ -421,7 +457,7 @@ function showStageEditor(app, stageName, stageData) {
         });
         toast("已保存");
         closeModal();
-        loadApplications();
+        syncTrackApplication(updated);
       } catch(e) { toast("保存失败: " + e.message); }
     } }, "保存")
   ];
@@ -429,10 +465,10 @@ function showStageEditor(app, stageName, stageData) {
   if (stageData.status === "completed" || stageIdx < STAGES.indexOf(app.current_stage)) {
     buttons.push(el("button", { class: "btn warn", onclick: async function() {
       try {
-        await API.post("/api/applications/" + app.id + "/rollback", { stage: stageName });
+        var updated = await API.post("/api/applications/" + app.id + "/rollback", { stage: stageName });
         toast("已回退到「" + stageName + "」");
         closeModal();
-        loadApplications();
+        syncTrackApplication(updated);
       } catch(e) { toast("回退失败: " + e.message); }
     } }, "⏪ 回退到此"));
   }
@@ -452,12 +488,12 @@ function editApplication(app) {
   );
   showModal("编辑投递 · " + app.company, body, [
     el("button", { class: "btn primary", onclick: async function() {
-      await API.patch("/api/applications/" + app.id, {
+      var updated = await API.patch("/api/applications/" + app.id, {
         company: val("ea-company"), title: val("ea-title"),
         applied_at: val("ea-applied") || null,
         channel: val("ea-channel") || null, notes: val("ea-notes") || null
       });
-      toast("已更新"); closeModal(); loadApplications();
+      toast("已更新"); closeModal(); syncTrackApplication(updated);
     } }, "保存"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
@@ -467,7 +503,7 @@ async function deleteApplication(id) {
   if (!confirm("确认删除此投递记录？所有阶段记录都将丢失。")) return;
   await API.del("/api/applications/" + id);
   toast("已删除");
-  loadApplications();
+  removeTrackApplication(id);
 }
 
 function showAddApplication() {
@@ -482,13 +518,13 @@ function showAddApplication() {
     el("button", { class: "btn primary", onclick: async function() {
       var company = val("na-company"), title = val("na-title");
       if (!company || !title) { toast("请填写公司和岗位"); return; }
-      await API.post("/api/applications", {
+      var created = await API.post("/api/applications", {
         company: company, title: title,
         channel: val("na-channel") || null,
         applied_at: val("na-applied") || null,
         notes: val("na-notes") || null
       });
-      toast("已添加"); closeModal(); loadApplications();
+      toast("已添加"); closeModal(); syncTrackApplication(created);
     } }, "添加"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);

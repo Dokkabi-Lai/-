@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Application, Group, Job, JobMark, User, get_db
@@ -52,8 +52,11 @@ class JobCreate(BaseModel):
     referrer_code: Optional[str] = None
 
 
-def _marks_map(db: Session, user_id: int) -> dict[int, JobMark]:
-    rows = db.query(JobMark).filter(JobMark.user_id == user_id).all()
+def _marks_map(db: Session, user_id: int, job_ids: list[int] | None = None) -> dict[int, JobMark]:
+    query = db.query(JobMark).filter(JobMark.user_id == user_id)
+    if job_ids:
+        query = query.filter(JobMark.job_id.in_(job_ids))
+    rows = query.all()
     return {m.job_id: m for m in rows}
 
 
@@ -118,20 +121,16 @@ def list_jobs(
     user: User = Depends(get_current_user),
     group: Group = Depends(get_current_group),
 ):
-    applied_ids = {
-        r[0]
-        for r in db.query(Application.job_id).filter(
-            Application.user_id == user.id,
-            Application.job_id.isnot(None),
-        ).all()
-        if r[0]
-    }
-    marks = _marks_map(db, user.id)
     q = db.query(Job).filter(Job.group_id == group.id, Job.is_active.is_not(False))
+    applied_ids_query = select(Application.job_id).where(
+        Application.user_id == user.id,
+        Application.job_id.isnot(None),
+    )
     if hide_passed:
-        passed_ids = [jid for jid, m in marks.items() if m.passed]
-        if passed_ids:
-            q = q.filter(~Job.id.in_(passed_ids))
+        q = q.filter(~Job.id.in_(select(JobMark.job_id).where(
+            JobMark.user_id == user.id,
+            JobMark.passed.is_(True),
+        )))
     if keyword:
         q = q.filter(or_(
             Job.company.contains(keyword),
@@ -147,22 +146,38 @@ def list_jobs(
     if source:
         q = q.filter(Job.source == source)
     if favorited is not None:
-        fav_ids = [jid for jid, m in marks.items() if m.favorited]
         if favorited:
-            q = q.filter(Job.id.in_(fav_ids or [-1]))
-        elif fav_ids:
-            q = q.filter(~Job.id.in_(fav_ids))
+            q = q.filter(Job.id.in_(select(JobMark.job_id).where(
+                JobMark.user_id == user.id,
+                JobMark.favorited.is_(True),
+            )))
+        else:
+            q = q.filter(~Job.id.in_(select(JobMark.job_id).where(
+                JobMark.user_id == user.id,
+                JobMark.favorited.is_(True),
+            )))
     if only_open:
         today = dt.date.today()
         q = q.filter(or_(Job.close_date == None, Job.close_date >= today))
-    if applied == "applied" and applied_ids:
-        q = q.filter(Job.id.in_(applied_ids))
-    elif applied == "applied":
-        q = q.filter(Job.id == -1)
-    elif applied == "unapplied" and applied_ids:
-        q = q.filter(~Job.id.in_(applied_ids))
+    if applied == "applied":
+        q = q.filter(Job.id.in_(applied_ids_query))
+    elif applied == "unapplied":
+        q = q.filter(~Job.id.in_(applied_ids_query))
     total = q.count()
     rows = q.order_by(desc(Job.created_at)).offset(offset).limit(limit).all()
+    row_ids = [job.id for job in rows]
+    applied_ids = set()
+    marks = {}
+    if row_ids:
+        applied_ids = {
+            row[0]
+            for row in db.query(Application.job_id).filter(
+                Application.user_id == user.id,
+                Application.job_id.in_(row_ids),
+            ).all()
+            if row[0]
+        }
+        marks = _marks_map(db, user.id, row_ids)
     return {
         "total": total,
         "items": [
@@ -321,7 +336,7 @@ def get_job(
     applied = db.query(Application).filter(
         Application.user_id == user.id, Application.job_id == job_id
     ).first() is not None
-    return _serialize(job, applied, _marks_map(db, user.id).get(job.id))
+    return _serialize(job, applied, _marks_map(db, user.id, [job.id]).get(job.id))
 
 
 @router.post("")
@@ -402,7 +417,7 @@ def pass_company(
     jobs = db.query(Job).filter(Job.group_id == group.id, Job.company == company).all()
     if not jobs:
         raise HTTPException(404, "没有找到该公司岗位")
-    marks = _marks_map(db, user.id)
+    marks = _marks_map(db, user.id, [job.id for job in jobs])
     all_passed = bool(jobs) and all(marks.get(j.id) and marks[j.id].passed for j in jobs)
     new_val = not all_passed
     for j in jobs:

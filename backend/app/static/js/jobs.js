@@ -90,6 +90,7 @@ async function loadFilterOptions() {
 
 var _jobTimer;
 var _jobApplyFilter = "all";
+var _jobsRequestId = 0;
 function debounceJobs() { clearTimeout(_jobTimer); _jobTimer = setTimeout(loadJobs, 300); }
 
 function setAppliedFilter(v) {
@@ -102,9 +103,11 @@ function setAppliedFilter(v) {
   loadJobs();
 }
 
-async function loadJobs() {
+async function loadJobs(options) {
+  options = options || {};
   var list = document.getElementById("job-list");
   if (!list) return;
+  var requestId = ++_jobsRequestId;
   var kw = val("f-kw");
   var loc = val("f-loc");
   var batch = val("f-batch");
@@ -124,9 +127,11 @@ async function loadJobs() {
   // 列表不传完整 JD，点开岗位时再加载详情，明显减小手机端首屏响应体。
   params.set("summary", "true");
   params.set("limit", "500");
-  list.innerHTML = '<div class="loading">加载中…</div>';
+  // 保存后静默刷新，保留当前列表，避免手机端出现整块闪烁和空白等待。
+  if (!options.silent) list.innerHTML = '<div class="loading">加载中…</div>';
   try {
     var data = await API.get("/api/jobs?" + params);
+    if (requestId !== _jobsRequestId) return;
     document.getElementById("job-count").textContent = "共 " + data.total + " 条";
     if (!data.items.length) {
       list.innerHTML = "";
@@ -146,6 +151,7 @@ async function loadJobs() {
       list.appendChild(companyGroup(company, groups[company]));
     });
   } catch(e) {
+    if (requestId !== _jobsRequestId) return;
     list.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }
 }
@@ -312,7 +318,7 @@ async function deleteJob(j) {
     await API.del("/api/jobs/" + j.id);
     toast("岗位已删除", "success");
     closeModal();
-    loadJobs();
+    loadJobs({ silent: true });
   } catch (e) {
     var msg = e.message || "";
     try { msg = JSON.parse(msg).detail || msg; } catch (_) {}
@@ -331,15 +337,16 @@ function quickApply(j) {
   showModal("记录投递 · " + j.company, body, [
     el("button", { class: "btn primary", onclick: async function() {
       try {
-        await API.post("/api/applications", {
+        var created = await API.post("/api/applications", {
           company: j.company, title: j.title, job_id: j.id,
           channel: val("apply-channel") || null,
           notes: val("apply-notes") || null
         });
         toast("已记录投递！去流程跟踪查看 →");
         closeModal();
+        if (typeof syncTrackApplication === "function") syncTrackApplication(created);
         if (typeof invalidatePages === "function") invalidatePages();
-        loadJobs();
+        loadJobs({ silent: true });
       } catch(e) { toast("失败: " + e.message); }
     } }, "确认投递"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
@@ -350,7 +357,7 @@ async function toggleCompanyPass(company) {
   try {
     await API.post("/api/jobs/pass-company", { company: company });
     toast("已更新 " + company);
-    loadJobs();
+    loadJobs({ silent: true });
   } catch(e) { toast("操作失败: " + e.message); }
 }
 
@@ -358,7 +365,7 @@ async function togglePass(id) {
   try {
     var r = await API.post("/api/jobs/" + id + "/pass");
     toast(r.passed ? "已标记Pass" : "已取消Pass");
-    loadJobs();
+    loadJobs({ silent: true });
   } catch(e) { toast("操作失败"); }
 }
 
@@ -366,7 +373,7 @@ async function toggleFav(id) {
   try {
     var r = await API.post("/api/jobs/" + id + "/favorite");
     toast(r.favorited ? "已收藏" : "已取消收藏");
-    loadJobs();
+    loadJobs({ silent: true });
   } catch(e) { toast("操作失败"); }
 }
 
@@ -407,7 +414,7 @@ async function submitAddJob() {
   await API.post("/api/jobs", data);
   closeModal();
   toast("岗位已添加");
-  loadJobs();
+  loadJobs({ silent: true });
 }
 
 async function reloadExcel() {
