@@ -81,12 +81,15 @@ async function loadCalendarData() {
   try {
     var monthUrl = "/api/calendar/month?year=" + calYear + "&month=" + calMonth;
     var statsUrl = "/api/calendar/month/stats?year=" + calYear + "&month=" + calMonth;
-    // 两个接口互不依赖，提前并行请求，减少日历首次打开的等待时间。
+    var todosUrl = "/api/todos";
+    // 三个接口互不依赖，提前并行请求，加入待办不会拖慢月视图。
     var monthRequest = API.get(monthUrl);
     var statsRequest = API.get(statsUrl);
+    var todosRequest = API.get(todosUrl).catch(function() { return []; });
     var data = await monthRequest;
     renderCalGrid(data.events || []);
-    renderEventList(data.events || []);
+    var todos = await todosRequest;
+    renderEventList(data.events || [], todos || []);
     statsRequest.then(function(stats) {
       renderCalStats(stats);
     }).catch(function() {});
@@ -194,7 +197,7 @@ function calEscape(value) {
   });
 }
 
-function renderEventList(events) {
+function renderEventList(events, todos) {
   var box = document.getElementById("cal-events");
   var visibleEvents = events.filter(function(e) { return _calVisibleTypes[e.type] !== false; });
   if (!visibleEvents.length) { box.innerHTML = ""; box.appendChild(emptyState("本月暂无笔试或面试安排")); return; }
@@ -205,19 +208,37 @@ function renderEventList(events) {
   });
   box.innerHTML = "";
   var currentDate = "";
+  var todoByStage = {};
+  (todos || []).forEach(function(todo) {
+    if (todo.source_type === "calendar_stage" && todo.source_id != null) {
+      todoByStage[String(todo.source_id)] = todo;
+    }
+  });
   visibleEvents.forEach(function(e) {
     var color = typeColors[e.type] || "#646a73";
     if (e.date !== currentDate) {
       currentDate = e.date;
       box.appendChild(el("div", { class: "event-date-header" }, e.date.slice(5) + " " + _weekdayName(e.date)));
     }
+    var existingTodo = todoByStage[String(e.id)];
+    var future = isFutureCalendarEvent(e);
+    var todoAction = future ? el("button", {
+      class: "event-todo-action" + (existingTodo ? " is-added" : ""),
+      type: "button",
+      disabled: !!existingTodo,
+      onclick: function(event) {
+        event.stopPropagation();
+        if (!existingTodo) addCalendarEventTodo(e, event.currentTarget, todos);
+      }
+    }, existingTodo ? "✓ 已加入" : "+ 加入待办") : null;
     var infoContent = el("div", { class: "event-info" },
       el("div", { class: "event-title" }, e.title),
       el("div", { class: "event-meta" },
         el("span", { class: "chip sm", style: "color:" + color }, typeLabels[e.type] || e.stage || e.type),
         e.type === "deadline" ? el("span", { class: "text-sm deadline-label" }, "截止前完成") : (e.time ? el("span", { class: "text-sm" }, e.time) : null),
         e.location ? el("span", { class: "text-sm" }, e.location) : null,
-        e.form ? el("span", { class: "text-sm" }, e.form) : null
+        e.form ? el("span", { class: "text-sm" }, e.form) : null,
+        todoAction
       )
     );
     box.appendChild(el("div", { class: "event-item" },
@@ -225,6 +246,49 @@ function renderEventList(events) {
       el("div", { class: "event-dot", style: "background:" + color }),
       infoContent
     ));
+  });
+}
+
+function isFutureCalendarEvent(event) {
+  if (!event || !event.event_at) return false;
+  var date = new Date(event.event_at);
+  return !Number.isNaN(date.getTime()) && date.getTime() > Date.now();
+}
+
+function calendarTodoCategory(event) {
+  if (!event) return "其他";
+  if (event.type === "interview") return "面试准备";
+  if (event.type === "exam" || event.type === "deadline") return "评测";
+  return "其他";
+}
+
+function calendarTodoTitle(event) {
+  var subject = event.title || event.stage || "日历安排";
+  return (event.type === "deadline" ? "完成 " : "准备 ") + subject;
+}
+
+function addCalendarEventTodo(event, button, todos) {
+  button.disabled = true;
+  button.textContent = "加入中…";
+  API.post("/api/todos", {
+    title: calendarTodoTitle(event),
+    category: calendarTodoCategory(event),
+    due_at: event.event_at,
+    notes: [
+      event.type === "deadline" ? "来源：笔试截止日程" : "来源：日历未来日程",
+      event.location || event.form || ""
+    ].filter(Boolean).join(" · "),
+    source_type: "calendar_stage",
+    source_id: event.id
+  }).then(function(todo) {
+    (todos || []).push(todo);
+    button.classList.add("is-added");
+    button.textContent = "✓ 已加入";
+    toast("已加入待办清单");
+  }).catch(function(error) {
+    button.disabled = false;
+    button.textContent = "+ 加入待办";
+    toast("加入失败: " + error.message);
   });
 }
 

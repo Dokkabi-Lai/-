@@ -2331,6 +2331,21 @@ button { font: inherit; }
   .job-row-actions .btn.sm { min-width: 58px; }
 }
 
+/* === 日历未来日程加入待办 === */
+.event-todo-action {
+  min-height: 25px; padding: 3px 8px; border: 1px solid rgba(189,96,60,.18); border-radius: 999px;
+  background: rgba(189,96,60,.055); color: var(--blue); cursor: pointer; font-size: 10px; font-weight: 700;
+  white-space: nowrap; transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.event-todo-action:hover { background: var(--blue-light); border-color: rgba(189,96,60,.32); color: var(--blue); }
+.event-todo-action.is-added { border-color: rgba(47,125,87,.18); background: var(--green-light); color: var(--green); cursor: default; }
+.event-todo-action:disabled { opacity: 1; }
+
+@media (max-width: 768px) {
+  .event-todo-action { min-height: 32px; padding: 6px 9px; font-size: 10px; }
+  .cal-agenda-card .event-meta { gap: 7px; }
+}
+
 /* === 首页个人待办 === */
 .todo-card {
   grid-column: 1 / -1;

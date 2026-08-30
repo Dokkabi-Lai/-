@@ -67,6 +67,8 @@ class Todo(Base):
     __tablename__ = "todos"
     __table_args__ = (
         Index("ix_todos_user_done_due", "user_id", "is_done", "due_at"),
+        Index("ix_todos_user_source", "user_id", "source_type", "source_id"),
+        UniqueConstraint("user_id", "source_type", "source_id", name="uq_todo_user_source"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -75,6 +77,8 @@ class Todo(Base):
     category: Mapped[str] = mapped_column(String(30), default="其他", nullable=False)
     due_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    source_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
@@ -452,6 +456,13 @@ def _migrate_db(engine) -> None:
             if "deadline_at" not in stage_cols:
                 conn.execute(text("ALTER TABLE application_stages ADD COLUMN deadline_at TIMESTAMP"))
             conn.execute(text("UPDATE application_stages SET schedule_type = 'exact' WHERE schedule_type IS NULL OR schedule_type = ''"))
+    if "todos" in insp.get_table_names():
+        todo_cols = {c["name"] for c in insp.get_columns("todos")}
+        with engine.begin() as conn:
+            if "source_type" not in todo_cols:
+                conn.execute(text("ALTER TABLE todos ADD COLUMN source_type VARCHAR(30)"))
+            if "source_id" not in todo_cols:
+                conn.execute(text("ALTER TABLE todos ADD COLUMN source_id INTEGER"))
 
 
 def _ensure_query_indexes(engine) -> None:
@@ -479,6 +490,8 @@ def _ensure_query_indexes(engine) -> None:
         "ON application_stages (scheduled_at)",
         "CREATE INDEX IF NOT EXISTS ix_application_stages_deadline "
         "ON application_stages (stage, schedule_type, deadline_at)",
+        "CREATE INDEX IF NOT EXISTS ix_todos_user_source "
+        "ON todos (user_id, source_type, source_id)",
     )
     with engine.begin() as conn:
         for statement in statements:

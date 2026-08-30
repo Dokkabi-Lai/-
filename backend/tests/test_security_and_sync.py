@@ -12,7 +12,7 @@ from app.api.home import _deadline_notifications
 from app.api.applications import _serialize_app, application_dashboard
 from app.api.todos import create_todo, query_todos, update_todo
 from app.config import get_settings
-from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, User, _ensure_default_group
+from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, Todo, User, _ensure_default_group
 from app.services.excel_import_service import _upsert_jobs, import_job_items
 from app.services.group_service import active_membership, ensure_user_default_group, ensure_user_personal_group
 
@@ -169,6 +169,41 @@ class TodoTests(unittest.TestCase):
             ["另一个账号的任务"],
         )
         self.assertEqual(len(query_todos(self.db, first_user.id, include_done=False)), 1)
+
+    def test_calendar_source_can_only_create_one_linked_todo(self):
+        user = User(username="calendar-todo", email="calendar-todo@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="日程公司",
+            title="产品岗",
+            status="进行中",
+            current_stage="一面",
+        )
+        self.db.add(app)
+        self.db.flush()
+        stage = ApplicationStage(
+            application_id=app.id,
+            stage="一面",
+            status="current",
+            scheduled_at=dt.datetime(2030, 9, 1, 10, 0),
+        )
+        self.db.add(stage)
+        self.db.commit()
+
+        payload = {
+            "title": "准备 日程公司 - 一面",
+            "category": "面试准备",
+            "due_at": "2030-09-01T10:00",
+            "source_type": "calendar_stage",
+            "source_id": stage.id,
+        }
+        first = create_todo(payload, self.db, user)
+        second = create_todo(payload, self.db, user)
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(self.db.query(Todo).filter(Todo.user_id == user.id).count(), 1)
 
 
 class GroupMembershipTests(unittest.TestCase):

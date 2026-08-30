@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, desc
 from sqlalchemy.orm import Session
 
-from ..models import Todo, User, get_db
+from ..models import Application, ApplicationStage, Todo, User, get_db
 from .deps import get_current_user
 
 
@@ -58,6 +58,8 @@ def serialize_todo(todo: Todo) -> dict:
         "category": todo.category or "其他",
         "due_at": todo.due_at.isoformat() if todo.due_at else None,
         "notes": todo.notes,
+        "source_type": todo.source_type,
+        "source_id": todo.source_id,
         "is_done": bool(todo.is_done),
         "completed_at": todo.completed_at.isoformat() if todo.completed_at else None,
         "created_at": todo.created_at.isoformat() if todo.created_at else None,
@@ -93,12 +95,40 @@ def create_todo(
     if notes is not None and not isinstance(notes, str):
         raise HTTPException(400, "备注格式不正确")
 
+    source_type = body.get("source_type")
+    source_id = body.get("source_id")
+    if source_type is not None or source_id is not None:
+        if source_type != "calendar_stage" or isinstance(source_id, bool):
+            raise HTTPException(400, "待办来源不正确")
+        try:
+            source_id = int(source_id)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "待办来源不正确")
+        source_stage = db.query(ApplicationStage).join(Application).filter(
+            ApplicationStage.id == source_id,
+            Application.user_id == user.id,
+        ).first()
+        if not source_stage:
+            raise HTTPException(404, "对应的日历日程不存在")
+        existing = db.query(Todo).filter(
+            Todo.user_id == user.id,
+            Todo.source_type == source_type,
+            Todo.source_id == source_id,
+        ).first()
+        if existing:
+            return serialize_todo(existing)
+    else:
+        source_type = None
+        source_id = None
+
     todo = Todo(
         user_id=user.id,
         title=title,
         category=_category(body.get("category")),
         due_at=_parse_datetime(body.get("due_at")),
         notes=notes.strip() if notes else None,
+        source_type=source_type,
+        source_id=source_id,
         is_done=False,
     )
     db.add(todo)
