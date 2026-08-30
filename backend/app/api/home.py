@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
 from .deps import get_current_group, get_current_user
+from .todos import query_todos, serialize_todo
 
 router = APIRouter(prefix="/api/home", tags=["home"])
 
@@ -167,6 +168,7 @@ def home_feed(
         1 for a in user_apps if a.status not in ("已淘汰", "已完成")
     )
     notifications = _deadline_notifications(db, user, group, today)
+    todos = [serialize_todo(todo) for todo in query_todos(db, user.id, limit=12)]
 
     return {
         "stats": {
@@ -209,6 +211,7 @@ def home_feed(
             for s in today_stages
         ],
         "notifications": notifications,
+        "todos": todos,
     }
 
 

@@ -2330,3 +2330,70 @@ button { font: inherit; }
   .btn.sm { padding-left: 11px; padding-right: 11px; }
   .job-row-actions .btn.sm { min-width: 58px; }
 }
+
+/* === 首页个人待办 === */
+.todo-card {
+  grid-column: 1 / -1;
+  min-height: 0;
+  background: linear-gradient(145deg, rgba(255, 252, 247, .94), rgba(244, 240, 250, .72));
+}
+.todo-card .section-kicker { color: var(--purple); }
+.todo-header-actions { display: flex; align-items: center; gap: 10px; }
+.todo-add {
+  min-height: 32px; padding: 5px 9px; border: 1px solid rgba(100, 76, 130, .16);
+  border-radius: 9px; background: rgba(255,255,255,.52); color: var(--purple); font-size: 11px;
+}
+.todo-add:hover { background: var(--purple-light); color: var(--purple); }
+.todo-count.has-items { background: var(--purple-light); color: var(--purple); }
+.todo-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.todo-item {
+  min-width: 0; display: grid; grid-template-columns: 30px minmax(0,1fr) 28px; align-items: center; gap: 8px;
+  padding: 8px 9px; border: 1px solid rgba(46,38,28,.07); border-radius: 14px;
+  background: rgba(255,255,255,.55); transition: background var(--transition), border-color var(--transition), opacity var(--transition);
+}
+.todo-item:hover { background: rgba(255,255,255,.9); border-color: rgba(100,76,130,.18); }
+.todo-item.is-done { background: rgba(246,244,247,.7); opacity: .76; }
+.todo-check {
+  width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid rgba(100,76,130,.32); border-radius: 50%; background: transparent; color: #fff;
+  cursor: pointer; font-size: 14px; font-weight: 800; transition: background var(--transition), border-color var(--transition), transform var(--transition);
+}
+.todo-check:hover { transform: scale(1.06); border-color: var(--purple); }
+.todo-check.is-done { border-color: var(--purple); background: var(--purple); }
+.todo-content {
+  min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 0; border: 0;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.todo-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; }
+.todo-item.is-done .todo-title { text-decoration: line-through; color: var(--text-tertiary); }
+.todo-meta { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--text-tertiary); font-size: 10px; }
+.todo-category { padding: 3px 6px; border-radius: 999px; background: var(--bg); color: var(--text-secondary); font-weight: 700; }
+.todo-category-assessment { background: var(--orange-light); color: var(--orange); }
+.todo-category-interview { background: var(--blue-light); color: var(--blue); }
+.todo-category-apply { background: var(--green-light); color: var(--green); }
+.todo-category-material { background: var(--teal-light); color: var(--teal); }
+.todo-due { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-due.is-urgent { color: var(--orange); font-weight: 700; }
+.todo-due.is-overdue { color: var(--red); font-weight: 750; }
+.todo-delete {
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent;
+  color: var(--text-quaternary); cursor: pointer; font-size: 19px; line-height: 1;
+}
+.todo-delete:hover { background: var(--red-light); color: var(--red); }
+.todo-empty { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 10px 4px; color: var(--text-secondary); }
+.todo-empty-mark { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 50%; background: var(--purple-light); color: var(--purple); font-weight: 800; }
+.todo-empty strong { display: block; font-size: 14px; }
+.todo-empty p { margin-top: 4px; color: var(--text-tertiary); font-size: 12px; }
+.todo-foot { display: flex; justify-content: space-between; }
+.todo-editor .form-row + .form-row { margin-top: 13px; }
+
+@media (max-width: 768px) {
+  .todo-card { grid-column: auto; }
+  .todo-list { grid-template-columns: 1fr; gap: 7px; }
+  .todo-item { grid-template-columns: 34px minmax(0,1fr) 34px; gap: 8px; padding: 9px 7px; }
+  .todo-check { width: 30px; height: 30px; }
+  .todo-delete { width: 34px; height: 34px; font-size: 20px; }
+  .todo-title { font-size: 12px; }
+  .todo-meta { font-size: 10px; }
+  .todo-add { min-height: 38px; padding: 8px 11px; }
+}

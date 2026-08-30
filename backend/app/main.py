@@ -15,7 +15,7 @@ from .config import BASE_DIR, get_settings
 from .models import init_db, get_db_backend, validate_database_config
 from .services.excel_import_service import import_jobs_from_config
 
-from .api import applications, auth, calendar, groups, home, jobs, schedules
+from .api import applications, auth, calendar, groups, home, jobs, schedules, todos
 
 
 STATIC_DIR = BASE_DIR / "app" / "static"
@@ -47,6 +47,7 @@ app.include_router(jobs.router)
 app.include_router(applications.router)
 app.include_router(calendar.router)
 app.include_router(schedules.router)
+app.include_router(todos.router)
 app.include_router(home.router)
 
 if STATIC_DIR.exists():

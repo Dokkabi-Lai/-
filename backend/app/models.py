@@ -57,6 +57,30 @@ class User(Base):
     preferences: Mapped[list["Preference"]] = relationship("Preference", back_populates="user")
     applications: Mapped[list["Application"]] = relationship("Application", back_populates="user")
     job_marks: Mapped[list["JobMark"]] = relationship("JobMark", back_populates="user")
+    todos: Mapped[list["Todo"]] = relationship(
+        "Todo", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Todo(Base):
+    """用户个人待办；不绑定群组，避免切换岗位库时混淆个人任务。"""
+    __tablename__ = "todos"
+    __table_args__ = (
+        Index("ix_todos_user_done_due", "user_id", "is_done", "due_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str] = mapped_column(String(30), default="其他", nullable=False)
+    due_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship("User", back_populates="todos")
 
 
 class Group(Base):

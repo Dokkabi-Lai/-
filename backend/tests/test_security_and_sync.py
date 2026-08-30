@@ -10,6 +10,7 @@ from app.api.auth import _SALT, hash_password, verify_password
 from app.api.deps import create_access_token
 from app.api.home import _deadline_notifications
 from app.api.applications import _serialize_app, application_dashboard
+from app.api.todos import create_todo, query_todos, update_todo
 from app.config import get_settings
 from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, User, _ensure_default_group
 from app.services.excel_import_service import _upsert_jobs, import_job_items
@@ -126,6 +127,48 @@ class DeadlineNotificationTests(unittest.TestCase):
         self.assertEqual(items[0]["kind"], "exam_deadline")
         self.assertEqual(items[0]["days_left"], 1)
         self.assertIn("job_deadline", {item["kind"] for item in items})
+
+
+class TodoTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_todos_are_personal_and_completion_is_persisted(self):
+        first_user = User(username="todo-first", email="todo-first@example.com", password_hash="x")
+        second_user = User(username="todo-second", email="todo-second@example.com", password_hash="x")
+        self.db.add_all([first_user, second_user])
+        self.db.flush()
+
+        created = create_todo({
+            "title": "完成在线测评",
+            "category": "评测",
+            "due_at": "2030-09-01T18:00",
+        }, self.db, first_user)
+        create_todo({
+            "title": "准备一面自我介绍",
+            "category": "面试准备",
+            "due_at": "2030-08-31T10:00",
+        }, self.db, first_user)
+        create_todo({"title": "另一个账号的任务"}, self.db, second_user)
+
+        completed = update_todo(created["id"], {"is_done": True}, self.db, first_user)
+
+        self.assertTrue(completed["is_done"])
+        self.assertIsNotNone(completed["completed_at"])
+        first_user_todos = query_todos(self.db, first_user.id)
+        self.assertEqual(len(first_user_todos), 2)
+        self.assertEqual(first_user_todos[0].title, "准备一面自我介绍")
+        self.assertTrue(first_user_todos[1].is_done)
+        self.assertEqual(
+            [todo.title for todo in query_todos(self.db, second_user.id)],
+            ["另一个账号的任务"],
+        )
+        self.assertEqual(len(query_todos(self.db, first_user.id, include_done=False)), 1)
 
 
 class GroupMembershipTests(unittest.TestCase):
