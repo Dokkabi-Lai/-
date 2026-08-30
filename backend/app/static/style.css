@@ -402,6 +402,9 @@ body {
   flex: 1; min-width: 64px; cursor: pointer;
   position: relative; z-index: 1;
 }
+.stage-item:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; border-radius: 10px; }
+.stage-item:hover .stage-label { color: var(--text); }
+.stage-item:hover .stage-dot { transform: scale(1.12); }
 .stage-dot {
   width: 14px; height: 14px; border-radius: 50%;
   background: var(--bg-secondary);

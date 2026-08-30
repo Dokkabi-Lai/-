@@ -214,8 +214,9 @@ function renderTrackPager(data, renderer) {
   var swipeActive = false;
   var suppressClickUntil = 0;
   cardWrap.addEventListener("pointerdown", function(event) {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    if (event.target && event.target.closest && event.target.closest("button,a,input,textarea,select")) return;
+    // 桌面端点击阶段需要触发编辑弹窗，翻页手势只在触摸/触控笔上启用。
+    if (event.pointerType === "mouse") return;
+    if (event.target && event.target.closest && event.target.closest("button,a,input,textarea,select,.stage-item")) return;
     swipeStartX = event.clientX;
     swipeStartY = event.clientY;
     swipeActive = true;
@@ -331,13 +332,26 @@ function appCard(app) {
     else if (statusClass === "current") statusText = "进行中";
     else if (statusClass === "skipped") statusText = "未通过";
 
-    var stageEl = el("div", { class: "stage-item " + statusClass },
+    var stageEl = el("div", {
+      class: "stage-item " + statusClass,
+      title: "点击编辑「" + stageName + "」时间和状态",
+      role: "button",
+      tabindex: "0",
+      "aria-label": "编辑" + stageName + "阶段"
+    },
       el("div", { class: "stage-dot " + statusClass }),
       el("div", { class: "stage-label " + statusClass }, stageName),
       statusText ? el("div", { class: "stage-status-text " + statusClass }, statusText) : null,
       stageScheduleLabel(stageData) ? el("div", { class: "stage-time" }, stageScheduleLabel(stageData)) : null
     );
     stageEl.onclick = function(e) { e.stopPropagation(); showStageEditor(app, stageName, stageData); };
+    stageEl.onkeydown = function(e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        showStageEditor(app, stageName, stageData);
+      }
+    };
     pipeline.appendChild(stageEl);
   });
   card.appendChild(pipeline);
