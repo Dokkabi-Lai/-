@@ -292,6 +292,7 @@ class ApplicationStage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False)
     stage: Mapped[str] = mapped_column(String(50))  # "投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer", "入职"
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 每条投递自己的流程顺序
     status: Mapped[str] = mapped_column(String(20), default="pending")  # "pending" / "current" / "completed" / "skipped"
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 安排的时间（同步到日历）
     schedule_type: Mapped[str] = mapped_column(String(20), default="exact", nullable=False)  # exact / deadline，主要用于笔试
@@ -451,10 +452,19 @@ def _migrate_db(engine) -> None:
     if "application_stages" in insp.get_table_names():
         stage_cols = {c["name"] for c in insp.get_columns("application_stages")}
         with engine.begin() as conn:
+            if "position" not in stage_cols:
+                conn.execute(text("ALTER TABLE application_stages ADD COLUMN position INTEGER"))
             if "schedule_type" not in stage_cols:
                 conn.execute(text("ALTER TABLE application_stages ADD COLUMN schedule_type VARCHAR(20) DEFAULT 'exact'"))
             if "deadline_at" not in stage_cols:
                 conn.execute(text("ALTER TABLE application_stages ADD COLUMN deadline_at TIMESTAMP"))
+            # 旧数据没有顺序字段，按原来的默认流程顺序补齐；自定义阶段放在末尾。
+            conn.execute(text(
+                "UPDATE application_stages SET position = CASE stage "
+                "WHEN '投递' THEN 0 WHEN '简历筛选' THEN 1 WHEN '笔试' THEN 2 "
+                "WHEN '一面' THEN 3 WHEN '二面' THEN 4 WHEN 'HR面' THEN 5 "
+                "WHEN 'Offer' THEN 6 ELSE 1000 END WHERE position IS NULL"
+            ))
             conn.execute(text("UPDATE application_stages SET schedule_type = 'exact' WHERE schedule_type IS NULL OR schedule_type = ''"))
     if "todos" in insp.get_table_names():
         todo_cols = {c["name"] for c in insp.get_columns("todos")}

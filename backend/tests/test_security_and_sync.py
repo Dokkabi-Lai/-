@@ -3,13 +3,14 @@ import hashlib
 import unittest
 
 import jwt
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import joinedload, selectinload, sessionmaker
 
 from app.api.auth import _SALT, hash_password, verify_password
 from app.api.deps import create_access_token
 from app.api.home import _deadline_notifications
-from app.api.applications import _serialize_app, application_dashboard
+from app.api.applications import _serialize_app, advance_stage, application_dashboard, update_workflow
 from app.api.todos import create_todo, query_todos, update_todo
 from app.config import get_settings
 from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, Todo, User, _ensure_default_group
@@ -357,6 +358,68 @@ class ApplicationAnalyticsTests(unittest.TestCase):
         payload = _serialize_app(row)
 
         self.assertEqual(payload["job_url"], "https://jobs.example.com/link-job")
+
+    def test_custom_workflow_is_ordered_and_advances_per_application(self):
+        user = User(username="workflow-user", email="workflow@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="流程公司",
+            title="产品岗",
+            status="进行中",
+            current_stage="投递",
+        )
+        self.db.add(app)
+        self.db.flush()
+        self._add_stages(app, ["completed", "pending", "pending", "pending", "pending", "pending", "pending"])
+        self.db.commit()
+
+        ids = {stage.stage: stage.id for stage in app.stages}
+        names = ["投递", "评测", "简历筛选", "AI面", "群面", "笔试", "一面", "二面", "HR面", "Offer"]
+        payload = [{"id": ids[name], "stage": name} for name in names if name in ids]
+        payload.insert(1, {"stage": "评测"})
+        payload.insert(3, {"stage": "AI面"})
+        payload.insert(4, {"stage": "群面"})
+
+        updated = update_workflow(app.id, {"stages": payload}, self.db, user)
+
+        self.assertEqual([stage["stage"] for stage in updated["stages"]], names)
+        self.assertEqual(updated["current_stage"], "评测")
+        self.assertEqual(
+            [stage["position"] for stage in updated["stages"]],
+            list(range(len(names))),
+        )
+
+        advanced = advance_stage(app.id, self.db, user)
+        self.assertEqual(advanced["current_stage"], "简历筛选")
+        self.assertEqual(advanced["stages"][1]["status"], "completed")
+
+    def test_workflow_cannot_delete_a_stage_with_history(self):
+        user = User(username="workflow-history", email="workflow-history@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="历史公司",
+            title="运营岗",
+            status="进行中",
+            current_stage="简历筛选",
+        )
+        self.db.add(app)
+        self.db.flush()
+        self._add_stages(app, ["completed", "current", "pending", "pending", "pending", "pending", "pending"])
+        self.db.commit()
+        ids = {stage.stage: stage.id for stage in app.stages}
+        without_application_stage = [
+            {"id": stage_id, "stage": name}
+            for name, stage_id in ids.items()
+            if name != "投递"
+        ]
+
+        with self.assertRaises(HTTPException) as context:
+            update_workflow(app.id, {"stages": without_application_stage}, self.db, user)
+        self.assertEqual(context.exception.status_code, 400)
 
 
 if __name__ == "__main__":

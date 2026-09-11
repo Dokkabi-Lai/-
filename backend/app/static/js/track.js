@@ -291,7 +291,8 @@ function appCard(app) {
     if (s.status === "current") explicitCurrentIdx = i;
   });
   var nextIdx = explicitCurrentIdx >= 0 ? explicitCurrentIdx : currentIdx + 1;
-  var nextStage = nextIdx < STAGES.length ? STAGES[nextIdx] : null;
+  while (nextIdx < stages.length && stages[nextIdx].status === "skipped") nextIdx++;
+  var nextStage = nextIdx < stages.length ? stages[nextIdx].stage : null;
 
   var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : ""), "data-app-id": app.id });
 
@@ -311,6 +312,7 @@ function appCard(app) {
       )
     ),
     el("div", { class: "btn-group" },
+      el("button", { class: "btn sm workflow-config-btn", title: "编辑这条投递的流程", onclick: function(e) { e.stopPropagation(); showWorkflowEditor(app); } }, "⚙️ 流程"),
       el("button", { class: "btn sm", onclick: function(e) { e.stopPropagation(); editApplication(app); } }, "✏️"),
       el("button", { class: "btn sm danger", onclick: function(e) { e.stopPropagation(); deleteApplication(app.id); } }, "🗑️")
     )
@@ -318,8 +320,8 @@ function appCard(app) {
 
   // 流程管道 - 带一键操作
   var pipeline = el("div", { class: "pipeline-stages" });
-  STAGES.forEach(function(stageName, idx) {
-    var stageData = stages.find(function(s) { return s.stage === stageName; }) || {};
+  stages.forEach(function(stageData, idx) {
+    var stageName = stageData.stage;
     var statusClass = "";
     if (isRejected && stageName === app.rejected_stage) statusClass = "rejected";
     else if (stageData.status === "completed") statusClass = "completed";
@@ -430,11 +432,12 @@ function rejectAtStage(app, stage) {
 }
 
 function showRejectDialog(app) {
+  var stages = app.stages || [];
   var body = el("div", {},
     el("p", {}, "标记「" + app.company + " · " + app.title + "」为已淘汰"),
     formRow("在哪个环节被淘汰", el("select", { class: "select", id: "reject-stage" },
-      ...STAGES.map(function(s) {
-        return el("option", { value: s, selected: s === app.current_stage ? true : undefined }, s);
+      ...stages.map(function(stage) {
+        return el("option", { value: stage.stage, selected: stage.stage === app.current_stage ? true : undefined }, stage.stage);
       })
     ))
   );
@@ -449,6 +452,155 @@ function showRejectDialog(app) {
   ]);
 }
 
+function showWorkflowEditor(app) {
+  var rows = (app.stages || []).map(function(stage) {
+    return {
+      id: stage.id,
+      stage: stage.stage || "",
+      status: stage.status || "pending",
+      locked: Boolean(
+        stage.status && stage.status !== "pending"
+        || stage.scheduled_at
+        || stage.deadline_at
+        || stage.completed_at
+        || stage.location
+        || stage.form
+        || stage.notes
+        || stage.feedback
+      )
+    };
+  });
+  var list = el("div", { class: "workflow-editor-list" });
+  var newStageInput = el("input", {
+    class: "input workflow-new-stage-input",
+    type: "text",
+    maxlength: "50",
+    placeholder: "输入自定义环节，如：AI面 / 群面 / 终面"
+  });
+
+  function addStage(name) {
+    name = (name || "").trim();
+    if (!name) {
+      toast("请先输入流程环节名称");
+      newStageInput.focus();
+      return;
+    }
+    if (rows.some(function(row) { return row.stage.trim() === name; })) {
+      toast("这个环节已经存在");
+      return;
+    }
+    var newRow = { id: null, stage: name, status: "pending", locked: false };
+    // 常用环节自动放到更符合直觉的位置，也可以继续用箭头微调。
+    var anchors = { "评测": "简历筛选", "AI面": "一面", "群面": "一面", "终面": "Offer" };
+    var anchorIndex = anchors[name] ? rows.findIndex(function(row) { return row.stage === anchors[name]; }) : -1;
+    if (anchorIndex >= 0) rows.splice(anchorIndex, 0, newRow);
+    else rows.push(newRow);
+    newStageInput.value = "";
+    renderRows();
+  }
+
+  function moveRow(index, offset) {
+    var nextIndex = index + offset;
+    if (nextIndex < 0 || nextIndex >= rows.length) return;
+    var moved = rows.splice(index, 1)[0];
+    rows.splice(nextIndex, 0, moved);
+    renderRows();
+  }
+
+  function removeRow(index) {
+    if (rows.length <= 1) {
+      toast("至少保留一个流程环节");
+      return;
+    }
+    rows.splice(index, 1);
+    renderRows();
+  }
+
+  function renderRows() {
+    list.innerHTML = "";
+    rows.forEach(function(row, index) {
+      var statusLabels = { pending: "待进行", current: "进行中", completed: "已通过", skipped: "已跳过" };
+      var nameInput = el("input", {
+        class: "input workflow-stage-input",
+        type: "text",
+        maxlength: "50",
+        value: row.stage,
+        "aria-label": "第" + (index + 1) + "个流程环节"
+      });
+      nameInput.addEventListener("input", function(event) { row.stage = event.target.value; });
+      var deleteButton = el("button", {
+        class: "btn sm danger workflow-row-delete",
+        type: "button",
+        title: row.locked ? "已有时间、状态或备注记录，不能删除" : "删除这个环节",
+        disabled: row.locked,
+        onclick: function() { removeRow(index); }
+      }, row.locked ? "🔒" : "删除");
+      list.appendChild(el("div", { class: "workflow-editor-row" },
+        el("div", { class: "workflow-row-index" }, String(index + 1).padStart(2, "0")),
+        el("div", { class: "workflow-row-main" },
+          nameInput,
+          el("div", { class: "workflow-row-meta" },
+            row.id ? (statusLabels[row.status] || "已有记录") : "新环节",
+            row.locked ? " · 历史记录已保护" : " · 可删除"
+          )
+        ),
+        el("div", { class: "workflow-row-controls" },
+          el("button", { class: "btn sm workflow-row-move", type: "button", title: "上移", disabled: index === 0, onclick: function() { moveRow(index, -1); } }, "↑"),
+          el("button", { class: "btn sm workflow-row-move", type: "button", title: "下移", disabled: index === rows.length - 1, onclick: function() { moveRow(index, 1); } }, "↓"),
+          deleteButton
+        )
+      ));
+    });
+  }
+
+  var presetNames = ["评测", "AI面", "群面", "终面"];
+  var body = el("div", { class: "workflow-editor-body" },
+    el("p", { class: "workflow-editor-intro" }, "每条投递可以有自己的流程。默认阶段会保留，已发生的时间和状态也会保留；你可以用上下箭头调整顺序，再添加 AI 面、群面或其他环节。"),
+    list,
+    el("div", { class: "workflow-presets" },
+      el("span", { class: "workflow-presets-label" }, "快速添加"),
+      ...presetNames.map(function(name) {
+        return el("button", { class: "btn sm ghost", type: "button", onclick: function() { addStage(name); } }, "+ " + name);
+      })
+    ),
+    el("div", { class: "workflow-add-row" },
+      newStageInput,
+      el("button", { class: "btn sm primary", type: "button", onclick: function() { addStage(newStageInput.value); } }, "添加环节")
+    ),
+    el("div", { class: "workflow-editor-note" }, "提示：已通过、进行中或已经填写过时间/备注的环节只能改名和排序，不能删除，避免历史数据丢失。")
+  );
+  newStageInput.addEventListener("keydown", function(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addStage(newStageInput.value);
+    }
+  });
+  renderRows();
+
+  showModal("编辑投递流程 · " + app.company, body, [
+    el("button", { class: "btn primary", onclick: async function() {
+      var names = rows.map(function(row) { return row.stage.trim(); });
+      if (names.some(function(name) { return !name; })) {
+        toast("流程环节名称不能为空");
+        return;
+      }
+      if (new Set(names).size !== names.length) {
+        toast("流程环节不能重名");
+        return;
+      }
+      try {
+        var updated = await API.patch("/api/applications/" + app.id + "/workflow", {
+          stages: rows.map(function(row) { return { id: row.id, stage: row.stage.trim() }; })
+        });
+        closeModal();
+        toast("流程已更新");
+        syncTrackApplication(updated);
+      } catch(e) { toast("保存流程失败: " + e.message); }
+    } }, "保存流程"),
+    el("button", { class: "btn", onclick: closeModal }, "取消")
+  ]);
+}
+
 async function restoreApp(id) {
   var updated = await API.post("/api/applications/" + id + "/restore");
   toast("♻️ 已恢复");
@@ -456,8 +608,10 @@ async function restoreApp(id) {
 }
 
 function showStageEditor(app, stageName, stageData) {
-  var stageIdx = STAGES.indexOf(stageName);
-  var isExam = stageName === "笔试";
+  var stages = app.stages || [];
+  var stageIdx = stages.findIndex(function(stage) { return stage.stage === stageName; });
+  var currentIdx = stages.findIndex(function(stage) { return stage.stage === app.current_stage; });
+  var isExam = /笔试|评测|测评/.test(stageName);
   var scheduleType = stageData.schedule_type || (stageData.deadline_at ? "deadline" : "exact");
   var exactTimeInput = el("input", {
     class: "input", id: "se-time", type: "datetime-local",
@@ -475,7 +629,7 @@ function showStageEditor(app, stageName, stageData) {
     el("option", { value: "exact", selected: scheduleType === "exact" ? true : undefined }, "固定时间 · 到点参加"),
     el("option", { value: "deadline", selected: scheduleType === "deadline" ? true : undefined }, "截止时间 · 在此之前完成")
   );
-  var scheduleModeRow = formRow("笔试时间类型", scheduleTypeSelect);
+  var scheduleModeRow = formRow("时间类型", scheduleTypeSelect);
 
   var timeFields = isExam ? [scheduleModeRow, exactTimeRow, deadlineTimeRow] : [exactTimeRow];
   var body = el("div", {},
@@ -533,7 +687,7 @@ function showStageEditor(app, stageName, stageData) {
     } }, "保存")
   ];
   // 回退按钮：如果当前阶段已经过了，允许回退到这个阶段
-  if (stageData.status === "completed" || stageIdx < STAGES.indexOf(app.current_stage)) {
+  if (stageData.status === "completed" || (stageIdx >= 0 && currentIdx >= 0 && stageIdx < currentIdx)) {
     buttons.push(el("button", { class: "btn warn", onclick: async function() {
       try {
         var updated = await API.post("/api/applications/" + app.id + "/rollback", { stage: stageName });

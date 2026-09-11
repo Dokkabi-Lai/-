@@ -9,6 +9,13 @@ var typeBgColors = {
 };
 var _calVisibleTypes = { exam: true, deadline: true, interview: true, other: true };
 
+function calendarEventLabel(event) {
+  if (!event) return "日程";
+  if (event.type === "deadline") return (event.stage || "笔试") + "截止";
+  if (event.type === "exam" || event.type === "interview") return event.stage || typeLabels[event.type];
+  return typeLabels[event.type] || event.stage || event.type || "其他安排";
+}
+
 window.load_calendar = async function() {
   var now = new Date();
   calYear = now.getFullYear();
@@ -234,7 +241,7 @@ function renderEventList(events, todos) {
     var infoContent = el("div", { class: "event-info" },
       el("div", { class: "event-title" }, e.title),
       el("div", { class: "event-meta" },
-        el("span", { class: "chip sm", style: "color:" + color }, typeLabels[e.type] || e.stage || e.type),
+        el("span", { class: "chip sm", style: "color:" + color }, calendarEventLabel(e)),
         e.type === "deadline" ? el("span", { class: "text-sm deadline-label" }, "截止前完成") : (e.time ? el("span", { class: "text-sm" }, e.time) : null),
         e.location ? el("span", { class: "text-sm" }, e.location) : null,
         e.form ? el("span", { class: "text-sm" }, e.form) : null,
@@ -275,7 +282,7 @@ function addCalendarEventTodo(event, button, todos) {
     category: calendarTodoCategory(event),
     due_at: event.event_at,
     notes: [
-      event.type === "deadline" ? "来源：笔试截止日程" : "来源：日历未来日程",
+      event.type === "deadline" ? "来源：" + (event.stage || "笔试") + "截止日程" : "来源：日历未来日程",
       event.location || event.form || ""
     ].filter(Boolean).join(" · "),
     source_type: "calendar_stage",

@@ -29,6 +29,7 @@ def _serialize_stage(s: ApplicationStage) -> dict:
     return {
         "id": s.id,
         "stage": s.stage,
+        "position": s.position if s.position is not None else 0,
         "status": s.status,
         "scheduled_at": s.scheduled_at.isoformat() if s.scheduled_at else None,
         "schedule_type": s.schedule_type or "exact",
@@ -41,6 +42,44 @@ def _serialize_stage(s: ApplicationStage) -> dict:
     }
 
 
+def _ordered_stage_rows(stages: list[ApplicationStage] | None) -> list[ApplicationStage]:
+    """按每条投递自己的流程顺序返回阶段。
+
+    ``position`` 是新版本的顺序字段。排序 key 里保留默认阶段名作为第二
+    级规则，是为了兼容刚升级但尚未完成迁移的旧记录，以及测试/导入数据。
+    """
+    rows = list(stages or [])
+    default_rank = {name: index for index, name in enumerate(STAGES)}
+    return sorted(
+        rows,
+        key=lambda row: (
+            row.position if row.position is not None else default_rank.get(row.stage, 1000),
+            default_rank.get(row.stage, 1000),
+            row.created_at or dt.datetime.min,
+            row.id or 0,
+        ),
+    )
+
+
+def _deadline_capable_stage(stage_name: str) -> bool:
+    """笔试/评测类阶段支持“固定时间”或“截止时间”两种安排方式。"""
+    return any(keyword in (stage_name or "") for keyword in ("笔试", "评测", "测评"))
+
+
+def _stage_has_history(stage: ApplicationStage) -> bool:
+    """有过状态或时间/备注记录的阶段不能直接删除。"""
+    return bool(
+        stage.status not in (None, "pending")
+        or stage.scheduled_at
+        or stage.deadline_at
+        or stage.completed_at
+        or stage.location
+        or stage.form
+        or stage.notes
+        or stage.feedback
+    )
+
+
 def _effective_current_stage(
     app: Application,
     stages: list[ApplicationStage] | None = None,
@@ -51,30 +90,29 @@ def _effective_current_stage(
     更新。阶段记录才是事实来源：优先取 current，其次取最后一个已完成阶段
     后面的第一个未跳过阶段。
     """
-    if app.status == "已完成":
-        return "Offer"
     stage_rows = app.stages if stages is None else stages
-    stage_map = {s.stage: s for s in (stage_rows or [])}
+    ordered_rows = _ordered_stage_rows(stage_rows)
+    if app.status == "已完成":
+        return ordered_rows[-1].stage if ordered_rows else (app.current_stage or "Offer")
     if app.status == "已淘汰":
         return app.rejected_stage or app.current_stage
 
-    for name in STAGES:
-        stage = stage_map.get(name)
-        if stage and stage.status == "current":
-            return name
+    for stage in ordered_rows:
+        if stage.status == "current":
+            return stage.stage
 
     last_completed_idx = -1
-    for idx, name in enumerate(STAGES):
-        stage = stage_map.get(name)
-        if stage and stage.status == "completed":
+    for idx, stage in enumerate(ordered_rows):
+        if stage.status == "completed":
             last_completed_idx = idx
-    for idx in range(last_completed_idx + 1, len(STAGES)):
-        stage = stage_map.get(STAGES[idx])
-        if not stage or stage.status != "skipped":
-            return STAGES[idx]
-    if app.current_stage in STAGES:
+    for stage in ordered_rows[last_completed_idx + 1:]:
+        if stage.status != "skipped":
+            return stage.stage
+    if app.current_stage in {stage.stage for stage in ordered_rows}:
         return app.current_stage
-    return STAGES[0] if stage_rows else None
+    if last_completed_idx >= 0:
+        return ordered_rows[last_completed_idx].stage
+    return ordered_rows[0].stage if ordered_rows else None
 
 
 def _reached_stage_index(
@@ -82,20 +120,27 @@ def _reached_stage_index(
     stages: list[ApplicationStage] | None = None,
 ) -> int:
     """返回投递记录实际到达过的最高阶段索引，用于漏斗统计。"""
-    if app.status == "已完成":
-        return len(STAGES) - 1
     stage_rows = app.stages if stages is None else stages
-    stage_map = {s.stage: s for s in (stage_rows or [])}
+    ordered_rows = _ordered_stage_rows(stage_rows)
+    if app.status == "已完成":
+        return len(ordered_rows) - 1 if ordered_rows else -1
     reached = [
-        idx for idx, name in enumerate(STAGES)
-        if (stage := stage_map.get(name))
-        and stage.status in ("completed", "current")
+        idx for idx, stage in enumerate(ordered_rows)
+        if stage.status in ("completed", "current")
     ]
-    if app.status == "已淘汰" and app.rejected_stage in STAGES:
-        reached.append(STAGES.index(app.rejected_stage))
+    if app.status == "已淘汰":
+        rejected_idx = next(
+            (idx for idx, stage in enumerate(ordered_rows) if stage.stage == app.rejected_stage),
+            None,
+        )
+        if rejected_idx is not None:
+            reached.append(rejected_idx)
     if reached:
         return max(reached)
-    return STAGES.index(app.current_stage) if app.current_stage in STAGES else -1
+    return next(
+        (idx for idx, stage in enumerate(ordered_rows) if stage.stage == app.current_stage),
+        -1,
+    )
 
 
 def _serialize_app(
@@ -103,15 +148,8 @@ def _serialize_app(
     stages: list[ApplicationStage] | None = None,
     job_url: str | None = None,
 ) -> dict:
-    # 按 STAGES 顺序排列阶段
     stage_rows = a.stages if stages is None else stages
-    stage_map = {s.stage: s for s in (stage_rows or [])}
-    ordered_stages = [_serialize_stage(stage_map[name]) for name in STAGES if name in stage_map]
-    # 追加不在 STAGES 列表中的阶段（容错）
-    known = set(STAGES)
-    for s in (stage_rows or []):
-        if s.stage not in known:
-            ordered_stages.append(_serialize_stage(s))
+    ordered_stages = [_serialize_stage(stage) for stage in _ordered_stage_rows(stage_rows)]
     if job_url is None:
         # 列表和单条查询会预加载 job；不要因为历史数据没有岗位关联而额外
         # 触发一次隐式查询。
@@ -194,13 +232,14 @@ def create_application(
     db.add(app)
     db.flush()  # 获取 app.id
 
-    # 创建 7 个阶段记录。把阶段对象保留在内存中，提交后直接序列化，
+    # 创建默认流程阶段。把阶段对象保留在内存中，提交后直接序列化，
     # 避免远程 PostgreSQL 再执行 refresh + lazy-load 的往返查询。
     stages = []
     for i, stage_name in enumerate(STAGES):
         stage = ApplicationStage(
             application_id=app.id,
             stage=stage_name,
+            position=i,
             status="completed" if i == 0 else "pending",
             schedule_type="exact",
             completed_at=dt.datetime.now() if i == 0 else None,
@@ -300,22 +339,32 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
             by_status["进行中"] += 1
         if a.status not in ("已淘汰", "已完成"):
             current = _effective_current_stage(a, a.stages)
-            if current in by_stage:
+            if current:
+                by_stage.setdefault(current, 0)
                 by_stage[current] += 1
 
-    def _reached(stage: str) -> int:
-        idx = STAGES.index(stage)
-        return sum(1 for a in apps if _reached_stage_index(a, a.stages) >= idx)
+    def _reached_named(matcher) -> int:
+        """按每条投递的自定义顺序统计到达过某类阶段的数量。"""
+        count = 0
+        for a in apps:
+            rows = _ordered_stage_rows(a.stages)
+            target_idx = next(
+                (idx for idx, row in enumerate(rows) if matcher(row.stage)),
+                None,
+            )
+            if target_idx is not None and _reached_stage_index(a, rows) >= target_idx:
+                count += 1
+        return count
 
     return {
         "total": len(apps),
         "by_status": by_status,
         "by_stage": by_stage,
         "funnel": {
-            "投递": _reached("投递"),
-            "简历筛选": _reached("简历筛选"),
-            "笔试": _reached("笔试"),
-            "面试": _reached("一面"),
+            "投递": _reached_named(lambda name: name == "投递"),
+            "简历筛选": _reached_named(lambda name: name == "简历筛选"),
+            "笔试": _reached_named(lambda name: "笔试" in name),
+            "面试": _reached_named(lambda name: "面" in name or "面试" in name),
             "Offer": by_status["已完成"],
         },
         "reject_by_stage": _reject_by_stage(apps),
@@ -408,6 +457,91 @@ def delete_application(app_id: int, db: Session = Depends(get_db), user: User = 
     return {"ok": True}
 
 
+# PATCH /api/applications/{id}/workflow - 更新某条投递的流程顺序与阶段
+@router.patch("/{app_id}/workflow")
+def update_workflow(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """编辑单条投递的流程，保留已经产生的阶段历史。"""
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
+    if not app:
+        raise HTTPException(404, "投递记录不存在")
+
+    raw_stages = body.get("stages") if isinstance(body, dict) else None
+    if not isinstance(raw_stages, list) or not raw_stages:
+        raise HTTPException(400, "至少保留一个流程环节")
+    if len(raw_stages) > 20:
+        raise HTTPException(400, "一条投递最多支持 20 个流程环节")
+
+    existing_by_id = {stage.id: stage for stage in (app.stages or []) if stage.id is not None}
+    submitted_ids: set[int] = set()
+    seen_names: set[str] = set()
+    ordered: list[ApplicationStage] = []
+
+    for position, item in enumerate(raw_stages):
+        if not isinstance(item, dict):
+            raise HTTPException(400, "流程环节格式不正确")
+        name = item.get("stage")
+        if not isinstance(name, str):
+            raise HTTPException(400, "流程环节名称不能为空")
+        name = name.strip()
+        if not name or len(name) > 50:
+            raise HTTPException(400, "流程环节名称需为 1-50 个字符")
+        if name in seen_names:
+            raise HTTPException(400, f"流程环节不能重名：{name}")
+        seen_names.add(name)
+
+        raw_id = item.get("id")
+        if raw_id in (None, ""):
+            stage = ApplicationStage(
+                application_id=app.id,
+                stage=name,
+                position=position,
+                status="pending",
+                schedule_type="exact",
+            )
+            app.stages.append(stage)
+        else:
+            try:
+                stage_id = int(raw_id)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "流程环节 id 不正确")
+            if stage_id in submitted_ids:
+                raise HTTPException(400, "同一个流程环节不能重复提交")
+            stage = existing_by_id.get(stage_id)
+            if not stage:
+                raise HTTPException(400, "流程环节不属于当前投递记录")
+            submitted_ids.add(stage_id)
+            old_name = stage.stage
+            if old_name != name:
+                if app.current_stage == old_name:
+                    app.current_stage = name
+                if app.rejected_stage == old_name:
+                    app.rejected_stage = name
+                stage.stage = name
+            stage.position = position
+        ordered.append(stage)
+
+    # 只有尚未开始且没有任何时间/备注的阶段才能删除，避免误删历史。
+    for stage in app.stages or []:
+        if stage.id in submitted_ids or stage.id is None:
+            continue
+        if _stage_has_history(stage):
+            raise HTTPException(400, f"「{stage.stage}」已有记录，不能删除；可以改为跳过")
+        db.delete(stage)
+
+    # 已拿到 Offer 后如果新增了待进行环节，自动重新打开流程。
+    if app.status == "已完成" and any(stage.status in ("pending", "current") for stage in ordered):
+        app.status = "进行中"
+    _sync_current_stage(app, db, ordered)
+    db.flush()
+    db.commit()
+    return _serialize_app(app, ordered)
+
+
 # PATCH /api/applications/{id}/stage/{stage_name} - 更新某个阶段
 @router.patch("/{app_id}/stage/{stage_name}")
 def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -438,13 +572,13 @@ def update_stage(app_id: int, stage_name: str, body: dict, db: Session = Depends
     if "schedule_type" in body:
         schedule_type = body.get("schedule_type") or "exact"
         if schedule_type not in ("exact", "deadline"):
-            raise HTTPException(400, "笔试时间类型不正确")
+            raise HTTPException(400, "时间类型不正确")
         stage.schedule_type = schedule_type
-    elif stage_name == "笔试" and body.get("deadline_at"):
+    elif _deadline_capable_stage(stage_name) and body.get("deadline_at"):
         # 兼容只提交截止时间的旧客户端。
         stage.schedule_type = "deadline"
 
-    if stage_name != "笔试":
+    if not _deadline_capable_stage(stage_name):
         stage.schedule_type = "exact"
         stage.deadline_at = None
     elif stage.schedule_type == "deadline":
@@ -486,72 +620,63 @@ def advance_stage(app_id: int, db: Session = Depends(get_db), user: User = Depen
         raise HTTPException(404, "投递记录不存在")
 
     # 兼容旧数据：如果缓存字段没有跟着阶段记录更新，先以真实阶段状态为准。
-    _sync_current_stage(app, db)
-    stage_map = {s.stage: s for s in (app.stages or [])}
+    ordered = _ordered_stage_rows(app.stages)
+    _sync_current_stage(app, db, ordered)
+    current_stage = next((stage for stage in ordered if stage.status == "current"), None)
+    if not current_stage:
+        current_stage = next((stage for stage in ordered if stage.stage == app.current_stage), None)
+    current_idx = ordered.index(current_stage) if current_stage in ordered else None
 
-    # 找到当前阶段在 STAGES 中的索引
-    current_idx = None
-    for i, name in enumerate(STAGES):
-        if name == app.current_stage:
-            current_idx = i
-            break
-
-    if current_idx is None:
+    if current_idx is None or current_stage is None:
         raise HTTPException(400, f"当前阶段 '{app.current_stage}' 无法识别")
 
-    if current_idx >= len(STAGES) - 1:
-        # 已经在最后一个阶段（Offer），标记为已完成
-        current_stage = stage_map.get(STAGES[current_idx])
-        if current_stage:
-            current_stage.status = "completed"
-            if not current_stage.completed_at:
-                current_stage.completed_at = dt.datetime.now()
+    current_stage.status = "completed"
+    if not current_stage.completed_at:
+        current_stage.completed_at = dt.datetime.now()
+
+    # 找到当前阶段之后第一个没有被跳过的环节。
+    next_stage = next(
+        (stage for stage in ordered[current_idx + 1:] if stage.status != "skipped"),
+        None,
+    )
+    if not next_stage:
+        # 已经完成自定义流程的最后一个阶段。
         app.status = "已完成"
-        app.current_stage = "Offer"
+        app.current_stage = current_stage.stage
         db.commit()
         return _serialize_app(app)
 
-    # 将当前阶段标记为 completed
-    current_stage = stage_map.get(STAGES[current_idx])
-    if current_stage:
-        current_stage.status = "completed"
-        if not current_stage.completed_at:
-            current_stage.completed_at = dt.datetime.now()
-
-    next_name = STAGES[current_idx + 1]
-    next_stage = stage_map.get(next_name)
-    if next_stage:
-        next_stage.status = "current"
-
-    app.current_stage = next_name
+    next_stage.status = "current"
+    app.current_stage = next_stage.stage
     db.commit()
     return _serialize_app(app)
 
 
-def _sync_current_stage(app: Application, db: Session):
+def _sync_current_stage(
+    app: Application,
+    db: Session,
+    stages: list[ApplicationStage] | None = None,
+):
     """根据实际阶段状态更新 Application.current_stage 缓存。"""
-    stage_map = {s.stage: s for s in (app.stages or [])}
-    current_stage = next(
-        (name for name in STAGES if stage_map.get(name) and stage_map[name].status == "current"),
+    ordered = _ordered_stage_rows(app.stages if stages is None else stages)
+    current_stage = next((stage for stage in ordered if stage.status == "current"), None)
+    if current_stage:
+        app.current_stage = current_stage.stage
+        return
+    last_completed_idx = max(
+        (idx for idx, stage in enumerate(ordered) if stage.status == "completed"),
+        default=-1,
+    )
+    next_stage = next(
+        (stage for stage in ordered[last_completed_idx + 1:] if stage.status != "skipped"),
         None,
     )
-    if current_stage:
-        app.current_stage = current_stage
-        return
-    last_completed = None
-    for name in STAGES:
-        s = stage_map.get(name)
-        if s and s.status == "completed":
-            last_completed = name
-    if last_completed:
-        idx = STAGES.index(last_completed)
-        if idx < len(STAGES) - 1:
-            app.current_stage = STAGES[idx + 1]
-        else:
-            app.current_stage = last_completed
-    else:
-        # 没有任何 completed 阶段，回到第一个
-        app.current_stage = STAGES[0]
+    if next_stage:
+        app.current_stage = next_stage.stage
+    elif last_completed_idx >= 0:
+        app.current_stage = ordered[last_completed_idx].stage
+    elif ordered:
+        app.current_stage = ordered[0].stage
 
 
 # POST /api/applications/{id}/rollback - 回退到指定阶段
@@ -568,33 +693,33 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
         raise HTTPException(404, "投递记录不存在")
 
     target_stage = body.get("stage")
-    if not target_stage or target_stage not in STAGES:
+    ordered = _ordered_stage_rows(app.stages)
+    stage_names = [stage.stage for stage in ordered]
+    if not target_stage or target_stage not in stage_names:
         raise HTTPException(400, "无效的阶段名")
 
-    target_idx = STAGES.index(target_stage)
-    stage_map = {s.stage: s for s in (app.stages or [])}
+    target_idx = stage_names.index(target_stage)
 
     # 将目标阶段及之后的阶段全部重置为 pending
-    for i in range(target_idx, len(STAGES)):
-        s = stage_map.get(STAGES[i])
-        if s:
-            s.status = "pending"
-            s.completed_at = None
+    for stage in ordered[target_idx:]:
+        stage.status = "pending"
+        stage.completed_at = None
 
     # 将目标阶段之前最后一个标记为 completed（如果有的话）
     if target_idx > 0:
-        prev = stage_map.get(STAGES[target_idx - 1])
+        prev = ordered[target_idx - 1]
         if prev and prev.status != "completed":
             prev.status = "completed"
             if not prev.completed_at:
                 prev.completed_at = dt.datetime.now()
 
     # 更新 current_stage
-    _sync_current_stage(app, db)
-    # 如果之前是淘汰状态，恢复
-    if app.status == "已淘汰":
+    _sync_current_stage(app, db, ordered)
+    # 如果之前是淘汰或已完成状态，回退即视为重新进行。
+    if app.status in ("已淘汰", "已完成"):
         app.status = "进行中"
-        app.rejected_stage = None
+        if app.rejected_stage:
+            app.rejected_stage = None
 
     db.commit()
     return _serialize_app(app)
@@ -613,6 +738,10 @@ def reject_application(app_id: int, body: dict, db: Session = Depends(get_db), u
         raise HTTPException(404, "投递记录不存在")
     if "stage" not in body:
         _sync_current_stage(app, db)
+    else:
+        valid_stages = {stage.stage for stage in (app.stages or [])}
+        if body.get("stage") not in valid_stages:
+            raise HTTPException(400, "无效的阶段名")
     app.status = "已淘汰"
     app.rejected_stage = body.get("stage", app.current_stage)
     # 将被淘汰的阶段标记为 skipped

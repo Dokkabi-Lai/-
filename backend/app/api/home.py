@@ -5,7 +5,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, case, desc, func
+from sqlalchemy import and_, case, desc, func, or_
 from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
@@ -37,6 +37,15 @@ def _deadline_label(days_left: int) -> str:
     if days_left == 1:
         return "明天截止"
     return f"{days_left}天后截止"
+
+
+def _deadline_stage_filter():
+    """支持默认笔试和自定义评测环节的截止提醒。"""
+    return or_(
+        ApplicationStage.stage == "笔试",
+        ApplicationStage.stage.like("%评测%"),
+        ApplicationStage.stage.like("%测评%"),
+    )
 
 
 def _deadline_notifications(db: Session, user: User, group: Group, today: dt.date) -> list[dict]:
@@ -75,7 +84,7 @@ def _deadline_notifications(db: Session, user: User, group: Group, today: dt.dat
         Application, Application.id == ApplicationStage.application_id
     ).filter(
         Application.user_id == user.id,
-        ApplicationStage.stage == "笔试",
+        _deadline_stage_filter(),
         ApplicationStage.schedule_type == "deadline",
         ApplicationStage.deadline_at.isnot(None),
         ApplicationStage.status.notin_(["completed", "skipped"]),
@@ -95,7 +104,7 @@ def _deadline_notifications(db: Session, user: User, group: Group, today: dt.dat
             "target_date": target.isoformat(),
             "company": app.company,
             "title": app.title,
-            "meta": "笔试截止",
+            "meta": f"{stage.stage}截止",
             "action": "track",
             "application_id": app.id,
         })

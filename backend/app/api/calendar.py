@@ -16,11 +16,20 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 def _stage_kind(stage: str, schedule_type: str = "exact") -> str:
     if schedule_type == "deadline":
         return "deadline"
-    if stage == "笔试":
+    if any(keyword in (stage or "") for keyword in ("笔试", "评测", "测评")):
         return "exam"
-    if stage in ("一面", "二面", "HR面"):
+    if "面" in (stage or "") or "面试" in (stage or ""):
         return "interview"
     return "other"
+
+
+def _deadline_stage_filter():
+    """支持默认笔试和自定义评测环节的截止时间日程。"""
+    return or_(
+        ApplicationStage.stage == "笔试",
+        ApplicationStage.stage.like("%评测%"),
+        ApplicationStage.stage.like("%测评%"),
+    )
 
 
 @router.get("/today")
@@ -62,7 +71,7 @@ def today(
         contains_eager(ApplicationStage.application)
     ).filter(
         Application.user_id == user.id,
-        ApplicationStage.stage == "笔试",
+        _deadline_stage_filter(),
         ApplicationStage.schedule_type == "deadline",
         ApplicationStage.deadline_at.isnot(None),
         ApplicationStage.status.notin_(["completed", "skipped"]),
@@ -129,7 +138,7 @@ def month_view(year: int, month: int, db: Session = Depends(get_db), user: User 
                 ApplicationStage.scheduled_at < stage_end,
             ),
             and_(
-                ApplicationStage.stage == "笔试",
+                _deadline_stage_filter(),
                 ApplicationStage.schedule_type == "deadline",
                 ApplicationStage.deadline_at.isnot(None),
                 ApplicationStage.deadline_at >= stage_start,
@@ -183,7 +192,7 @@ def month_stats(year: int, month: int, db: Session = Depends(get_db), user: User
                 ApplicationStage.scheduled_at < end,
             ),
             and_(
-                ApplicationStage.stage == "笔试",
+                _deadline_stage_filter(),
                 ApplicationStage.schedule_type == "deadline",
                 ApplicationStage.deadline_at.isnot(None),
                 ApplicationStage.deadline_at >= start,
