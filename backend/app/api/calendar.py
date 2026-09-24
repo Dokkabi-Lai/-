@@ -8,6 +8,11 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from ..services.stage_service import (
+    assessment_stage_filter,
+    is_assessment_stage,
+    is_interview_stage,
+)
 from .deps import get_current_group, get_current_user
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -16,20 +21,16 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 def _stage_kind(stage: str, schedule_type: str = "exact") -> str:
     if schedule_type == "deadline":
         return "deadline"
-    if any(keyword in (stage or "") for keyword in ("笔试", "评测", "测评")):
+    if is_assessment_stage(stage):
         return "exam"
-    if "面" in (stage or "") or "面试" in (stage or ""):
+    if is_interview_stage(stage):
         return "interview"
     return "other"
 
 
 def _deadline_stage_filter():
-    """支持默认笔试和自定义评测环节的截止时间日程。"""
-    return or_(
-        ApplicationStage.stage == "笔试",
-        ApplicationStage.stage.like("%评测%"),
-        ApplicationStage.stage.like("%测评%"),
-    )
+    """支持测评、评测、笔试与 AI 面的截止时间日程。"""
+    return assessment_stage_filter(ApplicationStage.stage)
 
 
 @router.get("/today")
@@ -117,7 +118,7 @@ def today(
 
 @router.get("/month")
 def month_view(year: int, month: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """某月的日历事件：仅笔试 / 面试 / 其他流程安排。"""
+    """某月的日历事件：测评 / 面试 / 其他流程安排。"""
     start = dt.date(year, month, 1)
     if month == 12:
         end = dt.date(year + 1, 1, 1)

@@ -291,11 +291,11 @@ class ApplicationStage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False)
-    stage: Mapped[str] = mapped_column(String(50))  # "投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer", "入职"
+    stage: Mapped[str] = mapped_column(String(50))  # "投递", "简历筛选", "测评", "一面", "二面", "HR面", "Offer", "入职"
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 每条投递自己的流程顺序
     status: Mapped[str] = mapped_column(String(20), default="pending")  # "pending" / "current" / "completed" / "skipped"
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 安排的时间（同步到日历）
-    schedule_type: Mapped[str] = mapped_column(String(20), default="exact", nullable=False)  # exact / deadline，主要用于笔试
+    schedule_type: Mapped[str] = mapped_column(String(20), default="exact", nullable=False)  # exact / deadline，主要用于测评类环节
     deadline_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)  # 截止前完成的时间
     completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
@@ -461,11 +461,38 @@ def _migrate_db(engine) -> None:
             # 旧数据没有顺序字段，按原来的默认流程顺序补齐；自定义阶段放在末尾。
             conn.execute(text(
                 "UPDATE application_stages SET position = CASE stage "
-                "WHEN '投递' THEN 0 WHEN '简历筛选' THEN 1 WHEN '笔试' THEN 2 "
+                "WHEN '投递' THEN 0 WHEN '简历筛选' THEN 1 WHEN '笔试' THEN 2 WHEN '测评' THEN 2 "
                 "WHEN '一面' THEN 3 WHEN '二面' THEN 4 WHEN 'HR面' THEN 5 "
                 "WHEN 'Offer' THEN 6 ELSE 1000 END WHERE position IS NULL"
             ))
             conn.execute(text("UPDATE application_stages SET schedule_type = 'exact' WHERE schedule_type IS NULL OR schedule_type = ''"))
+            # 仅迁移仍保持旧版默认名称和顺序的流程。任何新增、删减、改名或
+            # 调序过的流程都不会命中，避免覆盖用户已经做过的自定义设置。
+            legacy_default_ids = conn.execute(text(
+                "SELECT application_id FROM application_stages "
+                "GROUP BY application_id HAVING COUNT(*) = 7 "
+                "AND SUM(CASE WHEN stage = '投递' AND position = 0 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = '简历筛选' AND position = 1 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = '笔试' AND position = 2 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = '一面' AND position = 3 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = '二面' AND position = 4 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = 'HR面' AND position = 5 THEN 1 ELSE 0 END) = 1 "
+                "AND SUM(CASE WHEN stage = 'Offer' AND position = 6 THEN 1 ELSE 0 END) = 1"
+            )).scalars().all()
+            for application_id in legacy_default_ids:
+                conn.execute(text(
+                    "UPDATE application_stages SET stage = '测评' "
+                    "WHERE application_id = :application_id AND stage = '笔试'"
+                ), {"application_id": application_id})
+                if "applications" in insp.get_table_names():
+                    conn.execute(text(
+                        "UPDATE applications SET current_stage = '测评' "
+                        "WHERE id = :application_id AND current_stage = '笔试'"
+                    ), {"application_id": application_id})
+                    conn.execute(text(
+                        "UPDATE applications SET rejected_stage = '测评' "
+                        "WHERE id = :application_id AND rejected_stage = '笔试'"
+                    ), {"application_id": application_id})
     if "todos" in insp.get_table_names():
         todo_cols = {c["name"] for c in insp.get_columns("todos")}
         with engine.begin() as conn:

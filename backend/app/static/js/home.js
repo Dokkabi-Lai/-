@@ -158,7 +158,7 @@ function renderDeadlinePushes(items) {
         if (target === "track" && item.application_id) window._trackFocusId = item.application_id;
         showPage(target);
       } },
-        el("span", { class: "push-icon" }, item.kind === "exam_deadline" ? "笔" : "岗"),
+        el("span", { class: "push-icon" }, item.kind === "exam_deadline" ? "测" : "岗"),
         el("span", { class: "push-copy" },
           el("strong", {}, item.title || "未命名事项"),
           el("span", {}, item.company + " · " + item.meta)

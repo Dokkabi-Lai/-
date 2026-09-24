@@ -8,7 +8,7 @@ async function loadDashboard() {
     var funnelItems = [
       { label: "已投递", value: funnel["投递"] || 0, color: "#c45c26" },
       { label: "简历筛选", value: funnel["简历筛选"] || 0, color: "#b45309" },
-      { label: "笔试", value: funnel["笔试"] || 0, color: "#0f766e" },
+      { label: "测评", value: funnel["测评"] || 0, color: "#0f766e" },
       { label: "面试", value: funnel["面试"] || 0, color: "#2563eb" },
       { label: "Offer", value: funnel["Offer"] || 0, color: "#2f7d57" }
     ];

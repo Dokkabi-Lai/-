@@ -1,9 +1,42 @@
-var STAGES = ["投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"];
+var STAGES = ["投递", "简历筛选", "测评", "一面", "二面", "HR面", "Offer"];
 var _trackFilter = "all";
 var _trackPagerIndex = 0;
 var _trackPagerData = [];
 var _trackQuery = "";
 var _trackApplications = null;
+
+function normalizedTrackStageName(stageName) {
+  return String(stageName || "").replace(/\s+/g, "").toUpperCase();
+}
+
+function isTrackAssessmentStage(stageName) {
+  var normalized = normalizedTrackStageName(stageName);
+  return /测评|评测|笔试/.test(normalized) || (normalized.includes("AI") && normalized.includes("面"));
+}
+
+function isTrackInterviewStage(stageName) {
+  var normalized = normalizedTrackStageName(stageName);
+  return !isTrackAssessmentStage(normalized) && normalized.includes("面");
+}
+
+function trackStageHasProgress(stage) {
+  if (!stage) return false;
+  return ["current", "completed", "skipped"].includes(stage.status)
+    || Boolean(stage.scheduled_at || stage.deadline_at || stage.completed_at
+      || stage.location || stage.form || stage.notes || stage.feedback);
+}
+
+function applicationHasNewProgress(app) {
+  return (app.stages || []).some(function(stage) {
+    return stage.stage !== "投递" && trackStageHasProgress(stage);
+  });
+}
+
+function applicationHasEnteredInterview(app) {
+  return (app.stages || []).some(function(stage) {
+    return isTrackInterviewStage(stage.stage) && trackStageHasProgress(stage);
+  });
+}
 
 window.load_track = async function() {
   var page = document.getElementById("page-track");
@@ -23,6 +56,8 @@ window.load_track = async function() {
   page.appendChild(el("div", { class: "track-toolbar" },
     el("div", { class: "filter-tabs scroll-tabs", id: "track-tabs" },
       el("button", { class: "tab-btn" + (_trackFilter === "all" ? " active" : ""), "data-filter": "all", onclick: function() { setTrackFilter("all"); } }, "全部"),
+      el("button", { class: "tab-btn" + (_trackFilter === "progress" ? " active" : ""), "data-filter": "progress", onclick: function() { setTrackFilter("progress"); } }, "有新进展"),
+      el("button", { class: "tab-btn" + (_trackFilter === "interview" ? " active" : ""), "data-filter": "interview", onclick: function() { setTrackFilter("interview"); } }, "已进入面试"),
       el("button", { class: "tab-btn" + (_trackFilter === "active" ? " active" : ""), "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
       el("button", { class: "tab-btn rejected-filter" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
       el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer")
@@ -121,6 +156,8 @@ function renderTrackApplications(allData) {
   var box = document.getElementById("track-list");
   if (!box) return;
   var data = sortTrackApplications((allData || []).slice());
+    if (_trackFilter === "progress") data = data.filter(applicationHasNewProgress);
+    if (_trackFilter === "interview") data = data.filter(applicationHasEnteredInterview);
     if (_trackFilter === "active") data = data.filter(function(a) { return a.status !== "已淘汰" && a.status !== "已完成"; });
     if (_trackFilter === "rejected") data = data.filter(function(a) { return a.status === "已淘汰"; });
     if (_trackFilter === "completed") data = data.filter(function(a) { return a.status === "已完成"; });
@@ -142,7 +179,9 @@ function renderTrackApplications(allData) {
     if (!data.length) {
       var emptyText = query ? "没有匹配的岗位，换个关键词试试"
         : (_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！"
-          : (_trackFilter === "rejected" ? "暂时没有已淘汰的岗位" : "暂无投递记录"));
+          : (_trackFilter === "rejected" ? "暂时没有已淘汰的岗位"
+            : (_trackFilter === "progress" ? "还没有投递后的新进展"
+              : (_trackFilter === "interview" ? "还没有进入正式面试的岗位" : "暂无投递记录"))));
       box.appendChild(emptyState(emptyText));
       return;
     }
@@ -475,7 +514,7 @@ function showWorkflowEditor(app) {
     class: "input workflow-new-stage-input",
     type: "text",
     maxlength: "50",
-    placeholder: "输入自定义环节，如：AI面 / 群面 / 终面"
+    placeholder: "输入自定义环节，如：测评 / AI面 / 群面"
   });
 
   function addStage(name) {
@@ -491,7 +530,7 @@ function showWorkflowEditor(app) {
     }
     var newRow = { id: null, stage: name, status: "pending", locked: false };
     // 常用环节自动放到更符合直觉的位置，也可以继续用箭头微调。
-    var anchors = { "评测": "简历筛选", "AI面": "一面", "群面": "一面", "终面": "Offer" };
+    var anchors = { "测评": "一面", "评测": "一面", "笔试": "一面", "AI面": "一面", "群面": "一面", "终面": "Offer" };
     var anchorIndex = anchors[name] ? rows.findIndex(function(row) { return row.stage === anchors[name]; }) : -1;
     if (anchorIndex >= 0) rows.splice(anchorIndex, 0, newRow);
     else rows.push(newRow);
@@ -553,9 +592,9 @@ function showWorkflowEditor(app) {
     });
   }
 
-  var presetNames = ["评测", "AI面", "群面", "终面"];
+  var presetNames = ["测评", "AI面", "群面", "终面"];
   var body = el("div", { class: "workflow-editor-body" },
-    el("p", { class: "workflow-editor-intro" }, "每条投递可以有自己的流程。默认阶段会保留，已发生的时间和状态也会保留；你可以用上下箭头调整顺序，再添加 AI 面、群面或其他环节。"),
+    el("p", { class: "workflow-editor-intro" }, "每条投递可以有自己的流程。测评、AI 面和笔试都可以放在简历筛选前或后；添加后用上下箭头调整到公司的真实顺序。"),
     list,
     el("div", { class: "workflow-presets" },
       el("span", { class: "workflow-presets-label" }, "快速添加"),
@@ -611,7 +650,7 @@ function showStageEditor(app, stageName, stageData) {
   var stages = app.stages || [];
   var stageIdx = stages.findIndex(function(stage) { return stage.stage === stageName; });
   var currentIdx = stages.findIndex(function(stage) { return stage.stage === app.current_stage; });
-  var isExam = /笔试|评测|测评/.test(stageName);
+  var isExam = isTrackAssessmentStage(stageName);
   var scheduleType = stageData.schedule_type || (stageData.deadline_at ? "deadline" : "exact");
   var exactTimeInput = el("input", {
     class: "input", id: "se-time", type: "datetime-local",

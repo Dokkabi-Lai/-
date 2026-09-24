@@ -13,9 +13,10 @@ from app.api.home import _deadline_notifications
 from app.api.applications import _serialize_app, advance_stage, application_dashboard, update_workflow
 from app.api.todos import create_todo, query_todos, update_todo
 from app.config import get_settings
-from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, Todo, User, _ensure_default_group
+from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, Todo, User, _ensure_default_group, _migrate_db
 from app.services.excel_import_service import _upsert_jobs, import_job_items
 from app.services.group_service import active_membership, ensure_user_default_group, ensure_user_personal_group
+from app.services.stage_service import is_assessment_stage, is_interview_stage
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -272,7 +273,7 @@ class ApplicationAnalyticsTests(unittest.TestCase):
         self.db.add_all([
             ApplicationStage(application_id=app.id, stage=stage, status=status)
             for stage, status in zip(
-                ("投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"),
+                ("投递", "简历筛选", "测评", "一面", "二面", "HR面", "Offer"),
                 statuses,
             )
         ])
@@ -323,8 +324,38 @@ class ApplicationAnalyticsTests(unittest.TestCase):
 
         self.assertEqual(stats["by_status"], {"进行中": 2, "已淘汰": 1, "已完成": 1})
         self.assertEqual(stats["by_stage"]["简历筛选"], 1)
-        self.assertEqual(stats["by_stage"]["笔试"], 1)
-        self.assertEqual(stats["funnel"], {"投递": 4, "简历筛选": 4, "笔试": 2, "面试": 1, "Offer": 1})
+        self.assertEqual(stats["by_stage"]["测评"], 1)
+        self.assertEqual(stats["funnel"], {"投递": 4, "简历筛选": 4, "测评": 2, "面试": 1, "Offer": 1})
+
+    def test_ai_interview_counts_as_assessment_not_interview(self):
+        user = User(username="ai-stage-user", email="ai-stage@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="AI流程公司",
+            title="算法岗",
+            status="进行中",
+            current_stage="AI面",
+        )
+        self.db.add(app)
+        self.db.flush()
+        self.db.add_all([
+            ApplicationStage(application_id=app.id, stage="投递", position=0, status="completed"),
+            ApplicationStage(application_id=app.id, stage="AI面", position=1, status="current"),
+            ApplicationStage(application_id=app.id, stage="一面", position=2, status="pending"),
+            ApplicationStage(application_id=app.id, stage="Offer", position=3, status="pending"),
+        ])
+        self.db.commit()
+
+        stats = application_dashboard(self.db, user)
+
+        self.assertTrue(is_assessment_stage("AI 面"))
+        self.assertFalse(is_interview_stage("AI面"))
+        self.assertEqual(stats["by_stage"]["测评"], 1)
+        self.assertEqual(stats["by_stage"]["面试"], 0)
+        self.assertEqual(stats["funnel"]["测评"], 1)
+        self.assertEqual(stats["funnel"]["面试"], 0)
 
     def test_application_serializes_job_library_url(self):
         user = User(username="link-user", email="link@example.com", password_hash="x")
@@ -376,7 +407,7 @@ class ApplicationAnalyticsTests(unittest.TestCase):
         self.db.commit()
 
         ids = {stage.stage: stage.id for stage in app.stages}
-        names = ["投递", "评测", "简历筛选", "AI面", "群面", "笔试", "一面", "二面", "HR面", "Offer"]
+        names = ["投递", "评测", "简历筛选", "AI面", "群面", "测评", "一面", "二面", "HR面", "Offer"]
         payload = [{"id": ids[name], "stage": name} for name in names if name in ids]
         payload.insert(1, {"stage": "评测"})
         payload.insert(3, {"stage": "AI面"})
@@ -420,6 +451,61 @@ class ApplicationAnalyticsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as context:
             update_workflow(app.id, {"stages": without_application_stage}, self.db, user)
         self.assertEqual(context.exception.status_code, 400)
+
+    def test_migration_only_renames_untouched_legacy_default_workflow(self):
+        user = User(username="migration-user", email="migration@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        untouched = Application(
+            user_id=user.id,
+            company="默认流程公司",
+            title="产品岗",
+            status="已淘汰",
+            current_stage="笔试",
+            rejected_stage="笔试",
+        )
+        customized = Application(
+            user_id=user.id,
+            company="自定义流程公司",
+            title="运营岗",
+            status="进行中",
+            current_stage="笔试",
+        )
+        self.db.add_all([untouched, customized])
+        self.db.flush()
+        legacy_names = ["投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"]
+        self.db.add_all([
+            ApplicationStage(application_id=untouched.id, stage=name, position=index, status="pending")
+            for index, name in enumerate(legacy_names)
+        ])
+        custom_names = ["投递", "AI面", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"]
+        self.db.add_all([
+            ApplicationStage(application_id=customized.id, stage=name, position=index, status="pending")
+            for index, name in enumerate(custom_names)
+        ])
+        self.db.commit()
+
+        _migrate_db(self.db.get_bind())
+        self.db.expire_all()
+
+        untouched_names = [
+            row.stage for row in self.db.query(ApplicationStage)
+            .filter(ApplicationStage.application_id == untouched.id)
+            .order_by(ApplicationStage.position).all()
+        ]
+        custom_names_after = [
+            row.stage for row in self.db.query(ApplicationStage)
+            .filter(ApplicationStage.application_id == customized.id)
+            .order_by(ApplicationStage.position).all()
+        ]
+        migrated_untouched = self.db.get(Application, untouched.id)
+        migrated_customized = self.db.get(Application, customized.id)
+        self.assertEqual(untouched_names[2], "测评")
+        self.assertEqual(migrated_untouched.current_stage, "测评")
+        self.assertEqual(migrated_untouched.rejected_stage, "测评")
+        self.assertIn("笔试", custom_names_after)
+        self.assertIn("AI面", custom_names_after)
+        self.assertEqual(migrated_customized.current_stage, "笔试")
 
 
 if __name__ == "__main__":

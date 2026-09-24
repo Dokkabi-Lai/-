@@ -5,10 +5,11 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, case, desc, func, or_
+from sqlalchemy import and_, case, desc, func
 from sqlalchemy.orm import Session, contains_eager
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from ..services.stage_service import assessment_stage_filter
 from .deps import get_current_group, get_current_user
 from .todos import query_todos, serialize_todo
 
@@ -40,16 +41,12 @@ def _deadline_label(days_left: int) -> str:
 
 
 def _deadline_stage_filter():
-    """支持默认笔试和自定义评测环节的截止提醒。"""
-    return or_(
-        ApplicationStage.stage == "笔试",
-        ApplicationStage.stage.like("%评测%"),
-        ApplicationStage.stage.like("%测评%"),
-    )
+    """支持测评、评测、笔试与 AI 面的截止提醒。"""
+    return assessment_stage_filter(ApplicationStage.stage)
 
 
 def _deadline_notifications(db: Session, user: User, group: Group, today: dt.date) -> list[dict]:
-    """聚合首页提醒：岗位申请截止 + 笔试截止，按紧急程度排序。"""
+    """聚合首页提醒：岗位申请截止 + 测评截止，按紧急程度排序。"""
     items = []
     window_end = today + dt.timedelta(days=14)
 

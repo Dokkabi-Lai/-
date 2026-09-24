@@ -9,11 +9,18 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
 from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from ..services.stage_service import (
+    DEFAULT_APPLICATION_STAGES,
+    LEGACY_DEFAULT_APPLICATION_STAGES,
+    is_assessment_stage,
+    is_interview_stage,
+    stage_statistics_bucket,
+)
 from .deps import get_current_group, get_current_user
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
-STAGES = ["投递", "简历筛选", "笔试", "一面", "二面", "HR面", "Offer"]
+STAGES = DEFAULT_APPLICATION_STAGES
 
 
 def _parse_datetime(value, label: str) -> Optional[dt.datetime]:
@@ -50,6 +57,10 @@ def _ordered_stage_rows(stages: list[ApplicationStage] | None) -> list[Applicati
     """
     rows = list(stages or [])
     default_rank = {name: index for index, name in enumerate(STAGES)}
+    default_rank.update({
+        name: index for index, name in enumerate(LEGACY_DEFAULT_APPLICATION_STAGES)
+        if name not in default_rank
+    })
     return sorted(
         rows,
         key=lambda row: (
@@ -62,8 +73,8 @@ def _ordered_stage_rows(stages: list[ApplicationStage] | None) -> list[Applicati
 
 
 def _deadline_capable_stage(stage_name: str) -> bool:
-    """笔试/评测类阶段支持“固定时间”或“截止时间”两种安排方式。"""
-    return any(keyword in (stage_name or "") for keyword in ("笔试", "评测", "测评"))
+    """测评类阶段支持“固定时间”或“截止时间”两种安排方式。"""
+    return is_assessment_stage(stage_name)
 
 
 def _stage_has_history(stage: ApplicationStage) -> bool:
@@ -328,7 +339,7 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
     apps = db.query(Application).options(selectinload(Application.stages)).filter(
         Application.user_id == user.id
     ).all()
-    by_stage = {s: 0 for s in STAGES}
+    by_stage = {s: 0 for s in ("投递", "简历筛选", "测评", "面试", "Offer")}
     by_status = {"进行中": 0, "已淘汰": 0, "已完成": 0}
     for a in apps:
         if a.status == "已淘汰":
@@ -340,8 +351,9 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
         if a.status not in ("已淘汰", "已完成"):
             current = _effective_current_stage(a, a.stages)
             if current:
-                by_stage.setdefault(current, 0)
-                by_stage[current] += 1
+                bucket = stage_statistics_bucket(current)
+                by_stage.setdefault(bucket, 0)
+                by_stage[bucket] += 1
 
     def _reached_named(matcher) -> int:
         """按每条投递的自定义顺序统计到达过某类阶段的数量。"""
@@ -363,8 +375,8 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
         "funnel": {
             "投递": _reached_named(lambda name: name == "投递"),
             "简历筛选": _reached_named(lambda name: name == "简历筛选"),
-            "笔试": _reached_named(lambda name: "笔试" in name),
-            "面试": _reached_named(lambda name: "面" in name or "面试" in name),
+            "测评": _reached_named(is_assessment_stage),
+            "面试": _reached_named(is_interview_stage),
             "Offer": by_status["已完成"],
         },
         "reject_by_stage": _reject_by_stage(apps),

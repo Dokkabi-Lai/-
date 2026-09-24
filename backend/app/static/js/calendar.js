@@ -1,5 +1,5 @@
 var calYear, calMonth;
-var typeLabels = { exam: "笔试", deadline: "笔试截止", interview: "面试", other: "其他安排" };
+var typeLabels = { exam: "测评", deadline: "测评截止", interview: "面试", other: "其他安排" };
 var typeColors = { exam: "#0f766e", deadline: "#d97706", interview: "#2563eb", other: "#b45309" };
 var typeBgColors = {
   exam: "rgba(15,118,110,0.12)",
@@ -11,7 +11,7 @@ var _calVisibleTypes = { exam: true, deadline: true, interview: true, other: tru
 
 function calendarEventLabel(event) {
   if (!event) return "日程";
-  if (event.type === "deadline") return (event.stage || "笔试") + "截止";
+  if (event.type === "deadline") return (event.stage || "测评") + "截止";
   if (event.type === "exam" || event.type === "interview") return event.stage || typeLabels[event.type];
   return typeLabels[event.type] || event.stage || event.type || "其他安排";
 }
@@ -207,7 +207,7 @@ function calEscape(value) {
 function renderEventList(events, todos) {
   var box = document.getElementById("cal-events");
   var visibleEvents = events.filter(function(e) { return _calVisibleTypes[e.type] !== false; });
-  if (!visibleEvents.length) { box.innerHTML = ""; box.appendChild(emptyState("本月暂无笔试或面试安排")); return; }
+  if (!visibleEvents.length) { box.innerHTML = ""; box.appendChild(emptyState("本月暂无测评或面试安排")); return; }
   visibleEvents.sort(function(a, b) {
     var cmp = a.date.localeCompare(b.date);
     if (cmp !== 0) return cmp;
@@ -282,7 +282,7 @@ function addCalendarEventTodo(event, button, todos) {
     category: calendarTodoCategory(event),
     due_at: event.event_at,
     notes: [
-      event.type === "deadline" ? "来源：" + (event.stage || "笔试") + "截止日程" : "来源：日历未来日程",
+      event.type === "deadline" ? "来源：" + (event.stage || "测评") + "截止日程" : "来源：日历未来日程",
       event.location || event.form || ""
     ].filter(Boolean).join(" · "),
     source_type: "calendar_stage",
