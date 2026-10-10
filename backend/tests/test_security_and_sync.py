@@ -1,8 +1,10 @@
 import datetime as dt
 import hashlib
+import io
 import unittest
 
 import jwt
+import openpyxl
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import joinedload, selectinload, sessionmaker
@@ -10,11 +12,22 @@ from sqlalchemy.orm import joinedload, selectinload, sessionmaker
 from app.api.auth import _SALT, hash_password, verify_password
 from app.api.deps import create_access_token
 from app.api.home import _deadline_notifications
-from app.api.applications import _serialize_app, advance_stage, application_dashboard, update_workflow
+from app.api.applications import (
+    _serialize_app,
+    advance_stage,
+    application_dashboard,
+    decline_application,
+    rollback_stage,
+    update_workflow,
+)
 from app.api.todos import create_todo, query_todos, update_todo
 from app.config import get_settings
 from app.models import Application, ApplicationStage, Base, Group, GroupMember, Job, Todo, User, _ensure_default_group, _migrate_db
 from app.services.excel_import_service import _upsert_jobs, import_job_items
+from app.services.application_import_service import (
+    import_application_rows,
+    parse_application_import_file,
+)
 from app.services.group_service import active_membership, ensure_user_default_group, ensure_user_personal_group
 from app.services.stage_service import is_assessment_stage, is_interview_stage
 
@@ -129,6 +142,80 @@ class DeadlineNotificationTests(unittest.TestCase):
         self.assertEqual(items[0]["kind"], "exam_deadline")
         self.assertEqual(items[0]["days_left"], 1)
         self.assertIn("job_deadline", {item["kind"] for item in items})
+
+
+class BulkApplicationImportTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        self.user = User(username="bulk-user", email="bulk@example.com", password_hash="x")
+        self.db.add(self.user)
+        self.db.flush()
+        self.group = Group(name="批量投递测试", owner_id=self.user.id)
+        self.db.add(self.group)
+        self.db.flush()
+        self.job = Job(
+            group_id=self.group.id,
+            created_by_id=self.user.id,
+            source="manual",
+            source_id="existing-import-job",
+            company="匹配公司",
+            title="产品经理",
+        )
+        self.db.add(self.job)
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_import_matches_jobs_creates_missing_jobs_and_skips_duplicates(self):
+        rows = [
+            {"company": "匹配公司", "title": "产品经理", "applied_at": "2030-09-01"},
+            {"company": "匹配 公司", "title": "产品经理", "applied_at": "2030/09/01"},
+            {"company": "新增公司", "title": "数据分析", "applied_at": "2030年9月2日"},
+        ]
+
+        result = import_application_rows(self.db, self.user, self.group, rows)
+
+        self.assertEqual(result["imported"], 2)
+        self.assertEqual(result["matched_jobs"], 1)
+        self.assertEqual(result["created_jobs"], 1)
+        self.assertEqual(result["duplicates"], 1)
+        self.assertEqual(self.db.query(Job).filter(Job.group_id == self.group.id).count(), 2)
+        self.assertEqual(self.db.query(Application).filter(Application.user_id == self.user.id).count(), 2)
+        self.assertEqual(self.db.query(ApplicationStage).count(), 14)
+        matched_app = self.db.query(Application).filter(Application.company == "匹配公司").one()
+        self.assertEqual(matched_app.job_id, self.job.id)
+
+        repeated = import_application_rows(self.db, self.user, self.group, rows)
+        self.assertEqual(repeated["imported"], 0)
+        self.assertEqual(repeated["duplicates"], 3)
+
+    def test_csv_file_is_parsed_with_chinese_headers(self):
+        rows = parse_application_import_file(
+            "公司名称,岗位名称,投递时间\n示例公司,运营岗,2030-10-02\n".encode("utf-8"),
+            "applications.csv",
+        )
+
+        self.assertEqual(rows[0]["company"], "示例公司")
+        self.assertEqual(rows[0]["title"], "运营岗")
+        self.assertEqual(rows[0]["applied_at"], "2030-10-02")
+
+    def test_xlsx_file_is_parsed_with_excel_date(self):
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.append(["公司名字", "投递岗位", "投递日期"])
+        worksheet.append(["表格公司", "策略岗位", dt.datetime(2030, 10, 3, 9, 30)])
+        content = io.BytesIO()
+        workbook.save(content)
+        workbook.close()
+
+        rows = parse_application_import_file(content.getvalue(), "applications.xlsx")
+
+        self.assertEqual(rows[0]["company"], "表格公司")
+        self.assertEqual(rows[0]["title"], "策略岗位")
+        self.assertEqual(rows[0]["applied_at"], dt.datetime(2030, 10, 3, 9, 30))
 
 
 class TodoTests(unittest.TestCase):
@@ -322,7 +409,7 @@ class ApplicationAnalyticsTests(unittest.TestCase):
 
         stats = application_dashboard(self.db, user)
 
-        self.assertEqual(stats["by_status"], {"进行中": 2, "已淘汰": 1, "已完成": 1})
+        self.assertEqual(stats["by_status"], {"进行中": 2, "已淘汰": 1, "已拒绝": 0, "已完成": 1})
         self.assertEqual(stats["by_stage"]["简历筛选"], 1)
         self.assertEqual(stats["by_stage"]["测评"], 1)
         self.assertEqual(stats["funnel"], {"投递": 4, "简历筛选": 4, "测评": 2, "面试": 1, "Offer": 1})
@@ -451,6 +538,99 @@ class ApplicationAnalyticsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as context:
             update_workflow(app.id, {"stages": without_application_stage}, self.db, user)
         self.assertEqual(context.exception.status_code, 400)
+
+    def test_decline_is_separate_from_company_rejection(self):
+        user = User(username="decline-user", email="decline@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="主动拒绝公司",
+            title="产品岗",
+            status="进行中",
+            current_stage="一面",
+        )
+        self.db.add(app)
+        self.db.flush()
+        self.db.add_all([
+            ApplicationStage(application_id=app.id, stage="投递", position=0, status="completed"),
+            ApplicationStage(application_id=app.id, stage="一面", position=1, status="current"),
+            ApplicationStage(application_id=app.id, stage="Offer", position=2, status="pending"),
+        ])
+        self.db.commit()
+
+        payload = decline_application(app.id, {"stage": "一面"}, self.db, user)
+        stats = application_dashboard(self.db, user)
+
+        self.assertEqual(payload["status"], "已拒绝")
+        self.assertEqual(payload["rejected_stage"], "一面")
+        self.assertEqual(stats["by_status"]["已拒绝"], 1)
+        self.assertEqual(stats["by_status"]["进行中"], 0)
+
+    def test_rollback_clears_later_schedule_details_and_linked_todo(self):
+        user = User(username="rollback-user", email="rollback@example.com", password_hash="x")
+        self.db.add(user)
+        self.db.flush()
+        app = Application(
+            user_id=user.id,
+            company="回退公司",
+            title="算法岗",
+            status="进行中",
+            current_stage="二面",
+        )
+        self.db.add(app)
+        self.db.flush()
+        screening = ApplicationStage(
+            application_id=app.id, stage="简历筛选", position=0, status="completed"
+        )
+        first = ApplicationStage(
+            application_id=app.id, stage="一面", position=1, status="completed"
+        )
+        second = ApplicationStage(
+            application_id=app.id,
+            stage="二面",
+            position=2,
+            status="current",
+            scheduled_at=dt.datetime(2030, 10, 10, 10, 0),
+            location="会议室 A",
+            form="现场",
+            notes="准备案例",
+            feedback="沟通顺利",
+        )
+        offer = ApplicationStage(
+            application_id=app.id,
+            stage="Offer",
+            position=3,
+            status="pending",
+            deadline_at=dt.datetime(2030, 10, 15, 18, 0),
+            schedule_type="deadline",
+            notes="确认薪资",
+        )
+        self.db.add_all([screening, first, second, offer])
+        self.db.flush()
+        self.db.add_all([
+            Todo(user_id=user.id, title="准备二面", source_type="calendar_stage", source_id=second.id),
+            Todo(user_id=user.id, title="确认 Offer", source_type="calendar_stage", source_id=offer.id),
+        ])
+        self.db.commit()
+
+        payload = rollback_stage(app.id, {"stage": "一面"}, self.db, user)
+        self.db.expire_all()
+        cleared_second = self.db.get(ApplicationStage, second.id)
+        cleared_offer = self.db.get(ApplicationStage, offer.id)
+
+        self.assertEqual(payload["current_stage"], "一面")
+        self.assertIsNone(cleared_second.scheduled_at)
+        self.assertIsNone(cleared_second.location)
+        self.assertIsNone(cleared_second.form)
+        self.assertIsNone(cleared_second.notes)
+        self.assertIsNone(cleared_second.feedback)
+        self.assertIsNone(cleared_offer.deadline_at)
+        self.assertEqual(cleared_offer.schedule_type, "exact")
+        self.assertEqual(
+            self.db.query(Todo).filter(Todo.user_id == user.id).count(),
+            0,
+        )
 
     def test_migration_only_renames_untouched_legacy_default_workflow(self):
         user = User(username="migration-user", email="migration@example.com", password_hash="x")

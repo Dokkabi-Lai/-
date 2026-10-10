@@ -107,7 +107,8 @@ def _deadline_notifications(db: Session, user: User, group: Group, today: dt.dat
         })
 
     items.sort(key=lambda item: (item["priority"], item["target_date"], item["title"]))
-    return items[:10]
+    # 首页默认折叠展示，完整返回最近提醒后可在前端即时展开，无需再次请求。
+    return items[:30]
 
 
 @router.get("")
@@ -163,15 +164,16 @@ def home_feed(
         desc(Application.updated_at),
         desc(Application.id),
     ).all()
+    terminal_statuses = ("已淘汰", "已拒绝", "已完成")
     in_progress_apps = [
-        a for a in user_apps if a.status not in ("已淘汰", "已完成")
+        a for a in user_apps if a.status not in terminal_statuses
     ][:12]
     rejected_apps = [a for a in user_apps if a.status == "已淘汰"][:12]
     total_apps = len(user_apps)
     offer_count = sum(1 for a in user_apps if a.status == "已完成")
     rejected_count = sum(1 for a in user_apps if a.status == "已淘汰")
     in_progress_count = sum(
-        1 for a in user_apps if a.status not in ("已淘汰", "已完成")
+        1 for a in user_apps if a.status not in terminal_statuses
     )
     notifications = _deadline_notifications(db, user, group, today)
     todos = [serialize_todo(todo) for todo in query_todos(db, user.id, limit=12)]

@@ -247,6 +247,7 @@ class Application(Base):
         Index("ix_applications_user_updated", "user_id", "updated_at"),
         Index("ix_applications_user_applied", "user_id", "applied_at"),
         Index("ix_applications_user_status", "user_id", "status"),
+        Index("ix_applications_user_job", "user_id", "job_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -257,7 +258,7 @@ class Application(Base):
     channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 投递渠道
     resume_id: Mapped[Optional[int]] = mapped_column(ForeignKey("resumes.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="已投递")
-    # 已投递/进行中/已淘汰/已完成
+    # 已投递/进行中/已淘汰/已拒绝/已完成
     current_stage: Mapped[str] = mapped_column(String(50), default="投递")
     applied_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -521,6 +522,8 @@ def _ensure_query_indexes(engine) -> None:
         "ON applications (user_id, applied_at)",
         "CREATE INDEX IF NOT EXISTS ix_applications_user_status "
         "ON applications (user_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_applications_user_job "
+        "ON applications (user_id, job_id)",
         "CREATE INDEX IF NOT EXISTS ix_application_stages_application "
         "ON application_stages (application_id)",
         "CREATE INDEX IF NOT EXISTS ix_application_stages_schedule "

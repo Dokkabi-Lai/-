@@ -27,6 +27,8 @@ function trackStageHasProgress(stage) {
 }
 
 function applicationHasNewProgress(app) {
+  // “有新进展”只看仍在推进的岗位；淘汰、主动拒绝和已完成均单独归档。
+  if (["已淘汰", "已拒绝", "已完成"].includes(app.status)) return false;
   return (app.stages || []).some(function(stage) {
     return stage.stage !== "投递" && trackStageHasProgress(stage);
   });
@@ -50,7 +52,10 @@ window.load_track = async function() {
       el("h1", { class: "page-title" }, "流程跟踪"),
       el("div", { class: "page-sub muted" }, "流程、Offer 与进度都在这里")
     ),
-    el("button", { class: "btn primary", onclick: function() { showAddApplication(); } }, "+ 新增投递")
+    el("div", { class: "header-actions" },
+      el("button", { class: "btn", onclick: openApplicationImport }, "批量导入"),
+      el("button", { class: "btn primary", onclick: function() { showAddApplication(); } }, "+ 新增投递")
+    )
   ));
 
   page.appendChild(el("div", { class: "track-toolbar" },
@@ -60,6 +65,7 @@ window.load_track = async function() {
       el("button", { class: "tab-btn" + (_trackFilter === "interview" ? " active" : ""), "data-filter": "interview", onclick: function() { setTrackFilter("interview"); } }, "已进入面试"),
       el("button", { class: "tab-btn" + (_trackFilter === "active" ? " active" : ""), "data-filter": "active", onclick: function() { setTrackFilter("active"); } }, "进行中"),
       el("button", { class: "tab-btn rejected-filter" + (_trackFilter === "rejected" ? " active" : ""), "data-filter": "rejected", onclick: function() { setTrackFilter("rejected"); } }, "已淘汰"),
+      el("button", { class: "tab-btn declined-filter" + (_trackFilter === "declined" ? " active" : ""), "data-filter": "declined", onclick: function() { setTrackFilter("declined"); } }, "已拒绝"),
       el("button", { class: "tab-btn" + (_trackFilter === "offers" ? " active" : ""), "data-filter": "offers", onclick: function() { setTrackFilter("offers"); } }, "Offer")
     ),
     el("div", { class: "track-search" },
@@ -158,8 +164,9 @@ function renderTrackApplications(allData) {
   var data = sortTrackApplications((allData || []).slice());
     if (_trackFilter === "progress") data = data.filter(applicationHasNewProgress);
     if (_trackFilter === "interview") data = data.filter(applicationHasEnteredInterview);
-    if (_trackFilter === "active") data = data.filter(function(a) { return a.status !== "已淘汰" && a.status !== "已完成"; });
+    if (_trackFilter === "active") data = data.filter(function(a) { return !["已淘汰", "已拒绝", "已完成"].includes(a.status); });
     if (_trackFilter === "rejected") data = data.filter(function(a) { return a.status === "已淘汰"; });
+    if (_trackFilter === "declined") data = data.filter(function(a) { return a.status === "已拒绝"; });
     if (_trackFilter === "completed") data = data.filter(function(a) { return a.status === "已完成"; });
     if (_trackFilter === "offers") data = data.filter(function(a) { return a.status === "已完成"; });
 
@@ -180,8 +187,9 @@ function renderTrackApplications(allData) {
       var emptyText = query ? "没有匹配的岗位，换个关键词试试"
         : (_trackFilter === "offers" ? "还没有拿到 Offer，继续加油！"
           : (_trackFilter === "rejected" ? "暂时没有已淘汰的岗位"
+            : (_trackFilter === "declined" ? "暂时没有主动拒绝的岗位"
             : (_trackFilter === "progress" ? "还没有投递后的新进展"
-              : (_trackFilter === "interview" ? "还没有进入正式面试的岗位" : "暂无投递记录"))));
+              : (_trackFilter === "interview" ? "还没有进入正式面试的岗位" : "暂无投递记录")))));
       box.appendChild(emptyState(emptyText));
       return;
     }
@@ -323,6 +331,8 @@ function renderTrackPager(data, renderer) {
 function appCard(app) {
   var stages = app.stages || [];
   var isRejected = app.status === "已淘汰";
+  var isDeclined = app.status === "已拒绝";
+  var isTerminal = isRejected || isDeclined;
   var currentIdx = -1;
   var explicitCurrentIdx = -1;
   stages.forEach(function(s, i) {
@@ -333,7 +343,7 @@ function appCard(app) {
   while (nextIdx < stages.length && stages[nextIdx].status === "skipped") nextIdx++;
   var nextStage = nextIdx < stages.length ? stages[nextIdx].stage : null;
 
-  var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : ""), "data-app-id": app.id });
+  var card = el("div", { class: "pipeline-card" + (isRejected ? " rejected" : isDeclined ? " declined" : ""), "data-app-id": app.id });
 
   // 头部：岗位信息 + 操作
   card.appendChild(el("div", { class: "pipeline-header" },
@@ -346,7 +356,8 @@ function appCard(app) {
           app.channel ? el("span", { class: "chip sm" }, app.channel) : null,
           el("span", { class: "text-sm muted", style: "cursor:pointer", title: "点击修改投递时间", onclick: function(e) { e.stopPropagation(); editApplication(app); } }, "投递于 " + (app.applied_at || "").slice(0, 10)),
           app.job_url ? el("a", { class: "pipeline-job-link", href: app.job_url, target: "_blank", rel: "noopener noreferrer", onclick: function(e) { e.stopPropagation(); } }, "岗位链接 ↗") : null,
-          isRejected ? el("span", { class: "chip sm rejected-chip" }, "❌ " + (app.rejected_stage || "") + "淘汰") : null
+          isRejected ? el("span", { class: "chip sm rejected-chip" }, "❌ " + (app.rejected_stage || "") + "淘汰") : null,
+          isDeclined ? el("span", { class: "chip sm declined-chip" }, "🙅 " + (app.rejected_stage || "") + "拒绝") : null
         )
       )
     ),
@@ -362,14 +373,15 @@ function appCard(app) {
   stages.forEach(function(stageData, idx) {
     var stageName = stageData.stage;
     var statusClass = "";
-    if (isRejected && stageName === app.rejected_stage) statusClass = "rejected";
+    if (isTerminal && stageName === app.rejected_stage) statusClass = isDeclined ? "declined" : "rejected";
     else if (stageData.status === "completed") statusClass = "completed";
-    else if ((stageData.status === "current" || idx === nextIdx) && !isRejected) statusClass = "current";
+    else if ((stageData.status === "current" || idx === nextIdx) && !isTerminal) statusClass = "current";
     else if (stageData.status === "skipped") statusClass = "skipped";
 
     var statusText = "";
     if (statusClass === "completed") statusText = "已通过";
     else if (statusClass === "rejected") statusText = "未通过";
+    else if (statusClass === "declined") statusText = "已拒绝";
     else if (statusClass === "current") statusText = "进行中";
     else if (statusClass === "skipped") statusText = "未通过";
 
@@ -383,7 +395,7 @@ function appCard(app) {
       el("div", { class: "stage-dot " + statusClass }),
       el("div", { class: "stage-label " + statusClass }, stageName),
       statusText ? el("div", { class: "stage-status-text " + statusClass }, statusText) : null,
-      stageScheduleLabel(stageData) ? el("div", { class: "stage-time" }, stageScheduleLabel(stageData)) : null
+      el("div", { class: "stage-time" + (stageScheduleLabel(stageData) ? "" : " is-empty") }, stageScheduleLabel(stageData) || "\u00a0")
     );
     stageEl.onclick = function(e) { e.stopPropagation(); showStageEditor(app, stageName, stageData); };
     stageEl.onkeydown = function(e) {
@@ -399,17 +411,18 @@ function appCard(app) {
 
   // 底部操作栏 - 核心交互：通过/淘汰
   var footer = el("div", { class: "pipeline-footer" });
-  if (!isRejected && nextStage) {
+  if (!isTerminal && nextStage) {
     var passBtnText = nextStage === "Offer" ? "✅ 拿到Offer" : "✅ 通过";
     footer.appendChild(el("div", { class: "stage-action-bar" },
       el("span", { class: "text-sm" }, "当前: "),
       el("span", { class: "tag primary" }, nextStage),
-      el("button", { class: "btn sm ok", onclick: function(e) { e.stopPropagation(); advanceStage(app.id); } }, passBtnText),
-      el("button", { class: "btn sm danger", onclick: function(e) { e.stopPropagation(); rejectAtStage(app, nextStage); } }, "❌ 淘汰")
+      el("button", { class: "btn sm ok", onclick: function(e) { e.stopPropagation(); advanceStage(app.id, e.currentTarget); } }, passBtnText),
+      el("button", { class: "btn sm danger", onclick: function(e) { e.stopPropagation(); rejectAtStage(app, nextStage, e.currentTarget); } }, "❌ 淘汰"),
+      el("button", { class: "btn sm", onclick: function(e) { e.stopPropagation(); declineAtStage(app, nextStage, e.currentTarget); } }, "🙅 拒绝")
     ));
-  } else if (isRejected) {
+  } else if (isTerminal) {
     footer.appendChild(el("div", { class: "stage-action-bar" },
-      el("span", { class: "muted text-sm" }, "流程终止于「" + (app.rejected_stage || "") + "」"),
+      el("span", { class: "muted text-sm" }, (isDeclined ? "已主动拒绝于「" : "流程终止于「") + (app.rejected_stage || "") + "」"),
       el("button", { class: "btn sm", onclick: function(e) { e.stopPropagation(); restoreApp(app.id); } }, "♻️ 恢复")
     ));
   } else {
@@ -423,7 +436,8 @@ function appCard(app) {
   return card;
 }
 
-async function advanceStage(appId) {
+async function advanceStage(appId, button) {
+  if (button) { button.disabled = true; button.textContent = "处理中…"; }
   try {
     var r = await API.post("/api/applications/" + appId + "/advance");
     // 检查是否拿到了offer
@@ -433,7 +447,10 @@ async function advanceStage(appId) {
       toast("✅ 已通过，进入下一环节");
     }
     syncTrackApplication(r);
-  } catch(e) { toast("操作失败: " + e.message); }
+  } catch(e) {
+    if (button) { button.disabled = false; button.textContent = "✅ 通过"; }
+    toast("操作失败: " + e.message);
+  }
 }
 
 function showOfferCelebration(app) {
@@ -462,12 +479,28 @@ function showOfferCelebration(app) {
   ]);
 }
 
-function rejectAtStage(app, stage) {
+function rejectAtStage(app, stage, button) {
   // 直接淘汰，无需弹窗
+  if (button) { button.disabled = true; button.textContent = "处理中…"; }
   API.post("/api/applications/" + app.id + "/reject", { stage: stage }).then(function(updated) {
     toast("❌ 已标记在「" + stage + "」淘汰");
     syncTrackApplication(updated);
-  }).catch(function(e) { toast("操作失败"); });
+  }).catch(function(e) {
+    if (button) { button.disabled = false; button.textContent = "❌ 淘汰"; }
+    toast("操作失败");
+  });
+}
+
+function declineAtStage(app, stage, button) {
+  if (!confirm("确认主动拒绝「" + app.company + " · " + app.title + "」吗？之后可以在“已拒绝”中恢复。")) return;
+  if (button) { button.disabled = true; button.textContent = "处理中…"; }
+  API.post("/api/applications/" + app.id + "/decline", { stage: stage }).then(function(updated) {
+    toast("🙅 已标记为主动拒绝");
+    syncTrackApplication(updated);
+  }).catch(function() {
+    if (button) { button.disabled = false; button.textContent = "🙅 拒绝"; }
+    toast("操作失败");
+  });
 }
 
 function showRejectDialog(app) {
@@ -557,6 +590,7 @@ function showWorkflowEditor(app) {
 
   function renderRows() {
     list.innerHTML = "";
+    var fragment = document.createDocumentFragment();
     rows.forEach(function(row, index) {
       var statusLabels = { pending: "待进行", current: "进行中", completed: "已通过", skipped: "已跳过" };
       var nameInput = el("input", {
@@ -574,7 +608,7 @@ function showWorkflowEditor(app) {
         disabled: row.locked,
         onclick: function() { removeRow(index); }
       }, row.locked ? "🔒" : "删除");
-      list.appendChild(el("div", { class: "workflow-editor-row" },
+      fragment.appendChild(el("div", { class: "workflow-editor-row" },
         el("div", { class: "workflow-row-index" }, String(index + 1).padStart(2, "0")),
         el("div", { class: "workflow-row-main" },
           nameInput,
@@ -590,6 +624,7 @@ function showWorkflowEditor(app) {
         )
       ));
     });
+    list.appendChild(fragment);
   }
 
   var presetNames = ["测评", "AI面", "群面", "终面"];
@@ -617,7 +652,7 @@ function showWorkflowEditor(app) {
   renderRows();
 
   showModal("编辑投递流程 · " + app.company, body, [
-    el("button", { class: "btn primary", onclick: async function() {
+    el("button", { class: "btn primary", onclick: async function(event) {
       var names = rows.map(function(row) { return row.stage.trim(); });
       if (names.some(function(name) { return !name; })) {
         toast("流程环节名称不能为空");
@@ -628,13 +663,20 @@ function showWorkflowEditor(app) {
         return;
       }
       try {
+        var saveButton = event.currentTarget;
+        saveButton.disabled = true;
+        saveButton.textContent = "保存中…";
         var updated = await API.patch("/api/applications/" + app.id + "/workflow", {
           stages: rows.map(function(row) { return { id: row.id, stage: row.stage.trim() }; })
         });
         closeModal();
         toast("流程已更新");
         syncTrackApplication(updated);
-      } catch(e) { toast("保存流程失败: " + e.message); }
+      } catch(e) {
+        event.currentTarget.disabled = false;
+        event.currentTarget.textContent = "保存流程";
+        toast("保存流程失败: " + e.message);
+      }
     } }, "保存流程"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
@@ -708,7 +750,10 @@ function showStageEditor(app, stageName, stageData) {
   }
 
   var buttons = [
-    el("button", { class: "btn primary", onclick: async function() {
+    el("button", { class: "btn primary", onclick: async function(event) {
+      var saveButton = event.currentTarget;
+      saveButton.disabled = true;
+      saveButton.textContent = "保存中…";
       try {
         var updated = await API.patch("/api/applications/" + app.id + "/stage/" + encodeURIComponent(stageName), {
           status: val("se-status"),
@@ -722,18 +767,30 @@ function showStageEditor(app, stageName, stageData) {
         toast("已保存");
         closeModal();
         syncTrackApplication(updated);
-      } catch(e) { toast("保存失败: " + e.message); }
+      } catch(e) {
+        saveButton.disabled = false;
+        saveButton.textContent = "保存";
+        toast("保存失败: " + e.message);
+      }
     } }, "保存")
   ];
   // 回退按钮：如果当前阶段已经过了，允许回退到这个阶段
   if (stageData.status === "completed" || (stageIdx >= 0 && currentIdx >= 0 && stageIdx < currentIdx)) {
-    buttons.push(el("button", { class: "btn warn", onclick: async function() {
+    buttons.push(el("button", { class: "btn warn", onclick: async function(event) {
+      if (!confirm("回退后，「" + stageName + "」之后阶段的时间、地点、备注和日历待办都会被清除。确认继续吗？")) return;
+      var rollbackButton = event.currentTarget;
+      rollbackButton.disabled = true;
+      rollbackButton.textContent = "回退中…";
       try {
         var updated = await API.post("/api/applications/" + app.id + "/rollback", { stage: stageName });
         toast("已回退到「" + stageName + "」");
         closeModal();
         syncTrackApplication(updated);
-      } catch(e) { toast("回退失败: " + e.message); }
+      } catch(e) {
+        rollbackButton.disabled = false;
+        rollbackButton.textContent = "⏪ 回退到此";
+        toast("回退失败: " + e.message);
+      }
     } }, "⏪ 回退到此"));
   }
   buttons.push(el("button", { class: "btn", onclick: closeModal }, "取消"));
@@ -751,13 +808,22 @@ function editApplication(app) {
     formRow("备注", el("textarea", { class: "textarea", id: "ea-notes" }, app.notes || ""))
   );
   showModal("编辑投递 · " + app.company, body, [
-    el("button", { class: "btn primary", onclick: async function() {
-      var updated = await API.patch("/api/applications/" + app.id, {
-        company: val("ea-company"), title: val("ea-title"),
-        applied_at: val("ea-applied") || null,
-        channel: val("ea-channel") || null, notes: val("ea-notes") || null
-      });
-      toast("已更新"); closeModal(); syncTrackApplication(updated);
+    el("button", { class: "btn primary", onclick: async function(event) {
+      var button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "保存中…";
+      try {
+        var updated = await API.patch("/api/applications/" + app.id, {
+          company: val("ea-company"), title: val("ea-title"),
+          applied_at: val("ea-applied") || null,
+          channel: val("ea-channel") || null, notes: val("ea-notes") || null
+        });
+        toast("已更新"); closeModal(); syncTrackApplication(updated);
+      } catch (e) {
+        button.disabled = false;
+        button.textContent = "保存";
+        toast("保存失败: " + e.message);
+      }
     } }, "保存"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
@@ -779,16 +845,25 @@ function showAddApplication() {
     formRow("备注", el("textarea", { class: "textarea", id: "na-notes" }))
   );
   showModal("新增投递", body, [
-    el("button", { class: "btn primary", onclick: async function() {
+    el("button", { class: "btn primary", onclick: async function(event) {
       var company = val("na-company"), title = val("na-title");
       if (!company || !title) { toast("请填写公司和岗位"); return; }
-      var created = await API.post("/api/applications", {
-        company: company, title: title,
-        channel: val("na-channel") || null,
-        applied_at: val("na-applied") || null,
-        notes: val("na-notes") || null
-      });
-      toast("已添加"); closeModal(); syncTrackApplication(created);
+      var button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "添加中…";
+      try {
+        var created = await API.post("/api/applications", {
+          company: company, title: title,
+          channel: val("na-channel") || null,
+          applied_at: val("na-applied") || null,
+          notes: val("na-notes") || null
+        });
+        toast("已添加"); closeModal(); syncTrackApplication(created);
+      } catch (e) {
+        button.disabled = false;
+        button.textContent = "添加";
+        toast("添加失败: " + e.message);
+      }
     } }, "添加"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);

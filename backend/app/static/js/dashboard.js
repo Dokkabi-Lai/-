@@ -19,6 +19,7 @@ async function loadDashboard() {
     charts.appendChild(chartCard("状态分布", renderDonut([
       { label: "进行中", value: st["进行中"] || 0, color: "#2563eb" },
       { label: "已淘汰", value: st["已淘汰"] || 0, color: "#8a8174" },
+      { label: "已拒绝", value: st["已拒绝"] || 0, color: "#c45c26" },
       { label: "Offer", value: st["已完成"] || 0, color: "#2f7d57" }
     ])));
     var stages = d.by_stage || {};

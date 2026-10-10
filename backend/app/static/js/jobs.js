@@ -1,7 +1,18 @@
 window.load_jobs = async function() {
+  var activeGroupId = getActiveGroupId();
+  var cacheScope = String((currentUser && currentUser.id) || "anonymous") + ":" + String(activeGroupId);
+  if (_jobCacheGroupId !== cacheScope) {
+    _jobCache = null;
+    _jobCacheTotal = 0;
+    _jobCacheGroupId = cacheScope;
+    _expandedJobCompanies = {};
+  }
   var page = document.getElementById("page-jobs");
   page.innerHTML = "";
   var actions = el("div", { class: "header-actions", id: "jobs-header-actions" });
+  actions.appendChild(el("button", { class: "btn", title: "获取群组里的最新岗位", onclick: function(event) {
+    refreshJobs(event.currentTarget);
+  } }, "↻ 刷新"));
   var sub = el("div", { class: "page-sub muted", id: "jobs-header-sub" }, "岗位由群主和管理员维护");
 
   page.appendChild(el("div", { class: "page-header" },
@@ -50,9 +61,9 @@ window.load_jobs = async function() {
   page.appendChild(el("div", { id: "job-list" }, el("div", { class: "loading" }, "加载中…")));
 
   loadJobs();
-  loadFilterOptions();
   API.get("/api/jobs/import/status").then(function(status) {
     window._canSyncJobs = !!status.can_sync;
+    window._canManageJobs = !!status.can_manage;
     if (status.can_manage) {
       actions.appendChild(el("button", { class: "btn primary", onclick: openJobGrid }, "表格录入"));
       actions.appendChild(el("button", { class: "btn", onclick: function() { showAddJob(); } }, "+ 单条添加"));
@@ -66,32 +77,45 @@ window.load_jobs = async function() {
     } else if (status.can_manage) {
       sub.textContent = "上传 Excel 或表格录入，建立共享岗位库";
     }
+    if (_jobCache) renderJobsFromCache();
   }).catch(function() {});
 };
 
-async function loadFilterOptions() {
-  try {
-    var results = await Promise.all([
-      API.get("/api/jobs/batches/list"),
-      API.get("/api/jobs/company-types/list")
-    ]);
-    var batches = results[0];
-    var types = results[1];
-    var batchSelect = document.getElementById("f-batch");
-    batches.forEach(function(b) {
-      batchSelect.appendChild(el("option", { value: b.batch }, b.batch + " (" + b.count + ")"));
-    });
-    var typeSelect = document.getElementById("f-type");
-    types.forEach(function(t) {
-      typeSelect.appendChild(el("option", { value: t.company_type }, t.company_type + " (" + t.count + ")"));
-    });
-  } catch(e) {}
+function loadFilterOptions() {
+  if (!_jobCache) return;
+  var batchSelect = document.getElementById("f-batch");
+  var typeSelect = document.getElementById("f-type");
+  if (!batchSelect || !typeSelect) return;
+  var currentBatch = batchSelect.value;
+  var currentType = typeSelect.value;
+  var batches = {};
+  var types = {};
+  _jobCache.forEach(function(job) {
+    if (job.batch) batches[job.batch] = (batches[job.batch] || 0) + 1;
+    if (job.company_type) types[job.company_type] = (types[job.company_type] || 0) + 1;
+  });
+  batchSelect.innerHTML = "";
+  typeSelect.innerHTML = "";
+  batchSelect.appendChild(el("option", { value: "" }, "全部批次"));
+  typeSelect.appendChild(el("option", { value: "" }, "全部类型"));
+  Object.keys(batches).sort().forEach(function(name) {
+    batchSelect.appendChild(el("option", { value: name }, name + " (" + batches[name] + ")"));
+  });
+  Object.keys(types).sort().forEach(function(name) {
+    typeSelect.appendChild(el("option", { value: name }, name + " (" + types[name] + ")"));
+  });
+  batchSelect.value = currentBatch;
+  typeSelect.value = currentType;
 }
 
 var _jobTimer;
 var _jobApplyFilter = "all";
 var _jobsRequestId = 0;
-function debounceJobs() { clearTimeout(_jobTimer); _jobTimer = setTimeout(loadJobs, 300); }
+var _jobCache = null;
+var _jobCacheTotal = 0;
+var _jobCacheGroupId = null;
+var _expandedJobCompanies = {};
+function debounceJobs() { clearTimeout(_jobTimer); _jobTimer = setTimeout(loadJobs, 80); }
 
 function setAppliedFilter(v) {
   _jobApplyFilter = v;
@@ -107,52 +131,97 @@ async function loadJobs(options) {
   options = options || {};
   var list = document.getElementById("job-list");
   if (!list) return;
+  if (_jobCache && !options.refresh) {
+    renderJobsFromCache();
+    return;
+  }
   var requestId = ++_jobsRequestId;
-  var kw = val("f-kw");
-  var loc = val("f-loc");
-  var batch = val("f-batch");
-  var companyType = val("f-type");
-  var open = document.getElementById("f-open").checked;
-  var showPassed = document.getElementById("f-show-passed").checked;
-  var favorite = document.getElementById("f-favorite").checked;
-  var params = new URLSearchParams();
-  if (kw) params.set("keyword", kw);
-  if (loc) params.set("location", loc);
-  if (batch) params.set("batch", batch);
-  if (companyType) params.set("company_type", companyType);
-  if (open) params.set("only_open", "true");
-  if (showPassed) params.set("hide_passed", "false");
-  if (favorite) params.set("favorited", "true");
-  if (_jobApplyFilter !== "all") params.set("applied", _jobApplyFilter);
-  // 列表不传完整 JD，点开岗位时再加载详情，明显减小手机端首屏响应体。
-  params.set("summary", "true");
-  params.set("limit", "500");
-  // 保存后静默刷新，保留当前列表，避免手机端出现整块闪烁和空白等待。
+  // 一次取回轻量摘要，后续搜索、筛选、收藏和 Pass 都在浏览器内即时完成。
+  // 这样不会在每次输入时往返远程数据库，也不会让列表闪白。
+  var params = new URLSearchParams({ summary: "true", limit: "1000", hide_passed: "false" });
   if (!options.silent) list.innerHTML = '<div class="loading">加载中…</div>';
   try {
     var data = await API.get("/api/jobs?" + params);
     if (requestId !== _jobsRequestId) return;
-    document.getElementById("job-count").textContent = "共 " + data.total + " 条";
-    if (!data.items.length) {
-      list.innerHTML = "";
-      list.appendChild(emptyState("暂无岗位，点击「重新导入」从 Excel 加载"));
-      return;
-    }
-
-    var groups = {};
-    var order = [];
-    data.items.forEach(function(j) {
-      if (!groups[j.company]) { groups[j.company] = []; order.push(j.company); }
-      groups[j.company].push(j);
-    });
-
-    list.innerHTML = "";
-    order.forEach(function(company) {
-      list.appendChild(companyGroup(company, groups[company]));
-    });
+    _jobCache = data.items || [];
+    _jobCacheTotal = data.total || _jobCache.length;
+    loadFilterOptions();
+    renderJobsFromCache();
+    return true;
   } catch(e) {
     if (requestId !== _jobsRequestId) return;
     list.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
+    return false;
+  }
+}
+
+function renderJobsFromCache() {
+  var list = document.getElementById("job-list");
+  if (!list || !_jobCache) return;
+  var kw = val("f-kw");
+  var loc = val("f-loc");
+  var batch = val("f-batch");
+  var companyType = val("f-type");
+  var open = document.getElementById("f-open") && document.getElementById("f-open").checked;
+  var showPassed = document.getElementById("f-show-passed") && document.getElementById("f-show-passed").checked;
+  var favorite = document.getElementById("f-favorite") && document.getElementById("f-favorite").checked;
+  var keyword = kw.toLowerCase();
+  var location = loc.toLowerCase();
+  var today = jobTodayValue();
+  var items = _jobCache.filter(function(job) {
+    if (!showPassed && job.passed) return false;
+    if (favorite && !job.favorited) return false;
+    if (_jobApplyFilter === "applied" && !job.applied) return false;
+    if (_jobApplyFilter === "unapplied" && job.applied) return false;
+    if (batch && job.batch !== batch) return false;
+    if (companyType && job.company_type !== companyType) return false;
+    if (open && job.close_date && job.close_date.slice(0, 10) < today) return false;
+    if (location && !String(job.location || "").toLowerCase().includes(location)) return false;
+    if (keyword) {
+      var haystack = [job.company, job.title, job.location, job.batch, job.company_type, job.apply_rule]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(keyword)) return false;
+    }
+    return true;
+  });
+  var count = document.getElementById("job-count");
+  if (count) count.textContent = "显示 " + items.length + " 条" + (_jobCacheTotal > _jobCache.length ? "（前 " + _jobCache.length + " / " + _jobCacheTotal + "）" : "");
+  if (!items.length) {
+    list.innerHTML = "";
+    list.appendChild(emptyState(_jobCache.length ? "没有匹配的岗位，换个条件试试" : "暂无岗位，点击「重新导入」从 Excel 加载"));
+    return;
+  }
+  var groups = {};
+  var order = [];
+  items.forEach(function(job) {
+    if (!groups[job.company]) { groups[job.company] = []; order.push(job.company); }
+    groups[job.company].push(job);
+  });
+  var fragment = document.createDocumentFragment();
+  order.forEach(function(company) { fragment.appendChild(companyGroup(company, groups[company])); });
+  list.innerHTML = "";
+  list.appendChild(fragment);
+}
+
+function jobTodayValue() {
+  var now = new Date();
+  var year = now.getFullYear();
+  var month = String(now.getMonth() + 1).padStart(2, "0");
+  var day = String(now.getDate()).padStart(2, "0");
+  return year + "-" + month + "-" + day;
+}
+
+function cachedJob(id) {
+  return (_jobCache || []).find(function(job) { return String(job.id) === String(id); });
+}
+
+async function refreshJobs(button) {
+  if (button) { button.disabled = true; button.textContent = "刷新中…"; }
+  try {
+    var ok = await loadJobs({ refresh: true, silent: true });
+    if (ok) toast("岗位库已是最新");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "↻ 刷新"; }
   }
 }
 
@@ -171,6 +240,10 @@ function companyGroup(company, jobs) {
   if (officialUrl) {
     headerRight.appendChild(el("a", { href: officialUrl, target: "_blank", class: "btn sm", onclick: function(e) { e.stopPropagation(); } }, "🔗 投递"));
   }
+  headerRight.appendChild(el("button", { class: "btn sm", title: "在这家公司下增加岗位", onclick: function(e) {
+    e.stopPropagation();
+    showAddJob(meta);
+  } }, "+ 岗位"));
   headerRight.appendChild(el("button", { class: "btn sm" + (allPassed ? " active" : ""), onclick: function(e) { e.stopPropagation(); toggleCompanyPass(company); } }, allPassed ? "✅ 已Pass" : "👋 Pass"));
   headerRight.appendChild(el("div", { class: "company-arrow" }, "▾"));
 
@@ -189,11 +262,14 @@ function companyGroup(company, jobs) {
     ),
     headerRight
   );
-  header.onclick = function() { this.parentElement.classList.toggle("collapsed"); };
+  header.onclick = function() {
+    this.parentElement.classList.toggle("collapsed");
+    _expandedJobCompanies[company] = !this.parentElement.classList.contains("collapsed");
+  };
 
   var jobList = el("div", { class: "company-jobs" });
   jobs.forEach(function(j) { jobList.appendChild(jobRow(j)); });
-  return el("div", { class: "company-group collapsed" }, header, jobList);
+  return el("div", { class: "company-group" + (_expandedJobCompanies[company] ? "" : " collapsed") }, header, jobList);
 }
 
 function formatCloseDate(j) {
@@ -318,7 +394,10 @@ async function deleteJob(j) {
     await API.del("/api/jobs/" + j.id);
     toast("岗位已删除", "success");
     closeModal();
-    loadJobs({ silent: true });
+    _jobCache = (_jobCache || []).filter(function(job) { return String(job.id) !== String(j.id); });
+    _jobCacheTotal = Math.max(0, _jobCacheTotal - 1);
+    loadFilterOptions();
+    renderJobsFromCache();
   } catch (e) {
     var msg = e.message || "";
     try { msg = JSON.parse(msg).detail || msg; } catch (_) {}
@@ -331,14 +410,19 @@ function quickApply(j) {
   var body = el("div", {},
     formRow("公司", el("input", { class: "input", id: "apply-company", value: j.company, readonly: true })),
     formRow("岗位", el("input", { class: "input", id: "apply-title", value: j.title, readonly: true })),
+    formRow("投递日期", el("input", { class: "input", id: "apply-date", type: "date", value: jobTodayValue() })),
     formRow("投递渠道", el("input", { class: "input", id: "apply-channel", value: j.apply_rule || "", placeholder: "官网 / 内推 / 无限制投递" })),
     formRow("备注", el("textarea", { class: "textarea", id: "apply-notes", placeholder: "内推码、投递注意事项等", value: j.referrer_code ? "内推码: " + j.referrer_code : "" }))
   );
   showModal("记录投递 · " + j.company, body, [
-    el("button", { class: "btn primary", onclick: async function() {
+    el("button", { class: "btn primary", onclick: async function(event) {
+      var submitButton = event.currentTarget;
+      submitButton.disabled = true;
+      submitButton.textContent = "记录中…";
       try {
         var created = await API.post("/api/applications", {
           company: j.company, title: j.title, job_id: j.id,
+          applied_at: val("apply-date") || jobTodayValue(),
           channel: val("apply-channel") || null,
           notes: val("apply-notes") || null
         });
@@ -346,8 +430,14 @@ function quickApply(j) {
         closeModal();
         if (typeof syncTrackApplication === "function") syncTrackApplication(created);
         if (typeof invalidatePages === "function") invalidatePages();
-        loadJobs({ silent: true });
-      } catch(e) { toast("失败: " + e.message); }
+        var cached = cachedJob(j.id);
+        if (cached) cached.applied = true;
+        renderJobsFromCache();
+      } catch(e) {
+        submitButton.disabled = false;
+        submitButton.textContent = "确认投递";
+        toast("失败: " + e.message);
+      }
     } }, "确认投递"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
@@ -355,49 +445,57 @@ function quickApply(j) {
 
 async function toggleCompanyPass(company) {
   try {
-    await API.post("/api/jobs/pass-company", { company: company });
+    var result = await API.post("/api/jobs/pass-company", { company: company });
+    (_jobCache || []).forEach(function(job) {
+      if (job.company === company) job.passed = result.passed;
+    });
     toast("已更新 " + company);
-    loadJobs({ silent: true });
+    renderJobsFromCache();
   } catch(e) { toast("操作失败: " + e.message); }
 }
 
 async function togglePass(id) {
   try {
     var r = await API.post("/api/jobs/" + id + "/pass");
+    var job = cachedJob(id);
+    if (job) job.passed = r.passed;
     toast(r.passed ? "已标记Pass" : "已取消Pass");
-    loadJobs({ silent: true });
+    renderJobsFromCache();
   } catch(e) { toast("操作失败"); }
 }
 
 async function toggleFav(id) {
   try {
     var r = await API.post("/api/jobs/" + id + "/favorite");
+    var job = cachedJob(id);
+    if (job) job.favorited = r.favorited;
     toast(r.favorited ? "已收藏" : "已取消收藏");
-    loadJobs({ silent: true });
+    renderJobsFromCache();
   } catch(e) { toast("操作失败"); }
 }
 
-function showAddJob() {
+function showAddJob(prefill) {
+  prefill = prefill || {};
   var body = el("div", {},
-    formRow("公司名称 *", el("input", { class: "input", id: "add-j-company" })),
-    formRow("公司类型", el("input", { class: "input", id: "add-j-type", placeholder: "互联网 / 车企" })),
-    formRow("批次", el("input", { class: "input", id: "add-j-batch", placeholder: "正式批" })),
-    formRow("BASE", el("input", { class: "input", id: "add-j-loc", placeholder: "上海 / 杭州" })),
+    formRow("公司名称 *", el("input", { class: "input", id: "add-j-company", value: prefill.company || "" })),
+    formRow("公司类型", el("input", { class: "input", id: "add-j-type", value: prefill.company_type || "", placeholder: "互联网 / 车企" })),
+    formRow("批次", el("input", { class: "input", id: "add-j-batch", value: prefill.batch || "", placeholder: "正式批" })),
+    formRow("BASE", el("input", { class: "input", id: "add-j-loc", value: prefill.location || "", placeholder: "上海 / 杭州" })),
     formRow("岗位名称 *", el("input", { class: "input", id: "add-j-title" })),
-    formRow("投递机制", el("input", { class: "input", id: "add-j-rule", placeholder: "官网 / 内推 / 不限投" })),
+    formRow("投递机制", el("input", { class: "input", id: "add-j-rule", value: prefill.apply_rule || "", placeholder: "官网 / 内推 / 不限投" })),
     formRow("开始日期", el("input", { class: "input", id: "add-j-open", type: "date" })),
     formRow("截止日期", el("input", { class: "input", id: "add-j-close", type: "date" })),
-    formRow("投递链接", el("input", { class: "input", id: "add-j-url", placeholder: "https://..." })),
+    formRow("投递链接", el("input", { class: "input", id: "add-j-url", value: prefill.url || "", placeholder: "https://..." })),
     formRow("内推码", el("input", { class: "input", id: "add-j-ref" })),
     formRow("岗位 JD", el("textarea", { class: "textarea", id: "add-j-desc" }))
   );
   showModal("手动添加岗位", body, [
-    el("button", { class: "btn primary", onclick: function() { submitAddJob(); } }, "保存"),
+    el("button", { class: "btn primary", onclick: function(event) { submitAddJob(event.currentTarget); } }, "保存"),
     el("button", { class: "btn", onclick: closeModal }, "取消")
   ]);
 }
 
-async function submitAddJob() {
+async function submitAddJob(button) {
   var data = {
     company: val("add-j-company"), title: val("add-j-title"),
     company_type: val("add-j-type") || null,
@@ -411,10 +509,24 @@ async function submitAddJob() {
     referrer_code: val("add-j-ref") || null
   };
   if (!data.company || !data.title) { toast("请填写公司和岗位名称"); return; }
-  await API.post("/api/jobs", data);
-  closeModal();
-  toast("岗位已添加");
-  loadJobs({ silent: true });
+  if (button) { button.disabled = true; button.textContent = "保存中…"; }
+  try {
+    var created = await API.post("/api/jobs", data);
+    created.applied = false;
+    created.favorited = false;
+    created.passed = false;
+    created._detailsLoaded = true;
+    if (!_jobCache) _jobCache = [];
+    _jobCache.unshift(created);
+    _jobCacheTotal += 1;
+    closeModal();
+    toast("岗位已添加");
+    loadFilterOptions();
+    renderJobsFromCache();
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = "保存"; }
+    toast("添加失败: " + parseApiError(e));
+  }
 }
 
 async function reloadExcel() {
@@ -422,7 +534,8 @@ async function reloadExcel() {
   try {
     var r = await API.post("/api/jobs/import/reload");
     toast("导入完成：新增 " + r.created + "，更新 " + r.updated);
-    load_jobs();
+    _jobCache = null;
+    loadJobs({ refresh: true });
   } catch(e) { toast("导入失败: " + parseApiError(e)); }
 }
 
@@ -443,7 +556,8 @@ async function uploadExcelFile(file) {
   try {
     var r = await API.upload("/api/jobs/import/upload", fd);
     toast("导入完成：新增 " + r.created + "，更新 " + r.updated);
-    load_jobs();
+    _jobCache = null;
+    loadJobs({ refresh: true });
   } catch(e) { toast("导入失败: " + parseApiError(e)); }
 }
 

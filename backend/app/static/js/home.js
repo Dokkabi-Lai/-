@@ -132,50 +132,65 @@ function homeStat(icon, num, label, tone, onclick) {
 }
 
 function renderDeadlinePushes(items) {
-  var visible = items.slice(0, 6);
+  var expanded = false;
   var card = el("section", { class: "home-focus-card push-card" });
   card.appendChild(el("div", { class: "focus-card-header" },
     el("div", {},
       el("div", { class: "section-kicker" }, "ATTENTION NEEDED"),
       el("h2", {}, "今日推送")
     ),
-    el("span", { class: "focus-count " + (visible.length ? "has-items" : "") }, visible.length ? visible.length + " 项" : "清爽")
+    el("span", { class: "focus-count " + (items.length ? "has-items" : "") }, items.length ? items.length + " 项" : "清爽")
   ));
 
   var list = el("div", { class: "push-list" });
-  if (!visible.length) {
-    list.appendChild(el("div", { class: "focus-empty" },
-      el("span", { class: "focus-empty-mark" }, "✓"),
-      el("div", {},
-        el("strong", {}, "暂无临近截止事项"),
-        el("p", {}, "接下来 14 天可以按自己的节奏准备")
-      )
-    ));
-  } else {
-    visible.forEach(function(item) {
-      var target = item.action === "track" ? "track" : "jobs";
-      list.appendChild(el("button", { class: "push-item push-" + (item.tone || "normal"), onclick: function() {
-        if (target === "track" && item.application_id) window._trackFocusId = item.application_id;
-        showPage(target);
-      } },
-        el("span", { class: "push-icon" }, item.kind === "exam_deadline" ? "测" : "岗"),
-        el("span", { class: "push-copy" },
-          el("strong", {}, item.title || "未命名事项"),
-          el("span", {}, item.company + " · " + item.meta)
-        ),
-        el("span", { class: "push-countdown" },
-          el("strong", {}, formatNotificationDays(item)),
-          el("small", {}, item.label)
+  card.appendChild(list);
+  var foot = el("button", { class: "focus-card-foot focus-card-foot-button", type: "button" });
+  card.appendChild(foot);
+
+  function paint() {
+    var visible = expanded ? items : items.slice(0, 6);
+    list.classList.toggle("expanded", expanded);
+    list.innerHTML = "";
+    if (!visible.length) {
+      list.appendChild(el("div", { class: "focus-empty" },
+        el("span", { class: "focus-empty-mark" }, "✓"),
+        el("div", {},
+          el("strong", {}, "暂无临近截止事项"),
+          el("p", {}, "接下来 14 天可以按自己的节奏准备")
         )
       ));
-    });
+    } else {
+      visible.forEach(function(item) {
+        var target = item.action === "track" ? "track" : "jobs";
+        list.appendChild(el("button", { class: "push-item push-" + (item.tone || "normal"), onclick: function() {
+          if (target === "track" && item.application_id) window._trackFocusId = item.application_id;
+          showPage(target);
+        } },
+          el("span", { class: "push-icon" }, item.kind === "exam_deadline" ? "测" : "岗"),
+          el("span", { class: "push-copy" },
+            el("strong", {}, item.title || "未命名事项"),
+            el("span", {}, item.company + " · " + item.meta)
+          ),
+          el("span", { class: "push-countdown" },
+            el("strong", {}, formatNotificationDays(item)),
+            el("small", {}, item.label)
+          )
+        ));
+      });
+    }
+    if (items.length > 6) {
+      foot.style.display = "block";
+      foot.textContent = expanded
+        ? "收起提醒 ↑"
+        : "查看另外 " + (items.length - 6) + " 项最近截止提醒 ↓";
+      foot.onclick = function() { expanded = !expanded; paint(); };
+    } else {
+      foot.style.display = "block";
+      foot.textContent = "优先处理红色提醒，给自己留出缓冲时间";
+      foot.onclick = null;
+    }
   }
-  card.appendChild(list);
-  if (items.length > visible.length) {
-    card.appendChild(el("div", { class: "focus-card-foot" }, "还有 " + (items.length - visible.length) + " 项提醒 · 已按紧急程度排序"));
-  } else {
-    card.appendChild(el("div", { class: "focus-card-foot" }, "优先处理红色提醒，给自己留出缓冲时间"));
-  }
+  paint();
   return card;
 }
 

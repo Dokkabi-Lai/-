@@ -361,6 +361,7 @@ body {
 }
 .pipeline-card:hover { box-shadow: var(--shadow); }
 .pipeline-card.rejected { border-left: 4px solid var(--red); opacity: 0.8; }
+.pipeline-card.declined { border-left: 4px solid var(--orange); opacity: 0.86; }
 
 .pipeline-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
 .pipeline-info { display: flex; gap: 12px; align-items: flex-start; flex: 1; min-width: 0; }
@@ -386,6 +387,10 @@ body {
   background: var(--red-light) !important; color: var(--red) !important;
   font-weight: 600 !important;
 }
+.declined-chip {
+  background: var(--orange-light) !important; color: var(--orange) !important;
+  font-weight: 600 !important;
+}
 
 /* === 管道阶段 === */
 .pipeline-stages {
@@ -399,7 +404,7 @@ body {
 }
 .stage-item {
   display: flex; flex-direction: column; align-items: center; gap: 5px;
-  flex: 1; min-width: 64px; cursor: pointer;
+  flex: 1 1 0; width: 0; min-width: 96px; cursor: pointer;
   position: relative; z-index: 1;
 }
 .stage-item:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; border-radius: 10px; }
@@ -416,6 +421,7 @@ body {
 .stage-dot.current { background: var(--info); box-shadow: 0 0 0 2px var(--info), 0 2px 6px rgba(37,99,235,0.3); animation: pulseDot 2s infinite; }
 .stage-dot.skipped { background: var(--text-quaternary); box-shadow: 0 0 0 2px var(--text-quaternary); }
 .stage-dot.rejected { background: var(--red); box-shadow: 0 0 0 2px var(--red), 0 2px 6px rgba(255,59,48,0.3); }
+.stage-dot.declined { background: var(--orange); box-shadow: 0 0 0 2px var(--orange), 0 2px 6px rgba(196,92,38,0.25); }
 
 @keyframes pulseDot {
   0%, 100% { box-shadow: 0 0 0 2px var(--info), 0 2px 6px rgba(37,99,235,0.3); }
@@ -427,7 +433,13 @@ body {
 .stage-label.current { color: var(--info); font-weight: 600; }
 .stage-label.skipped { color: var(--text-quaternary); text-decoration: line-through; }
 .stage-label.rejected { color: var(--red); font-weight: 600; }
-.stage-time { font-size: 10px; color: var(--text-tertiary); text-align: center; white-space: nowrap; background: var(--bg); padding: 1px 6px; border-radius: 4px; }
+.stage-label.declined { color: var(--orange); font-weight: 600; }
+.stage-time {
+  width: 100%; min-height: 18px; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
+  font-size: 10px; color: var(--text-tertiary); text-align: center; white-space: nowrap;
+  background: var(--bg); padding: 1px 6px; border-radius: 4px;
+}
+.stage-time.is-empty { visibility: hidden; }
 .stage-has-review { font-size: 10px; }
 
 .pipeline-footer {
@@ -759,6 +771,7 @@ body {
 .stage-status-text.completed { color: var(--green); }
 .stage-status-text.current { color: var(--info); }
 .stage-status-text.rejected, .stage-status-text.skipped { color: var(--red); }
+.stage-status-text.declined { color: var(--orange); }
 
 /* === 日历类型筛选 === */
 .cal-type-filters { margin-bottom: 16px; }
@@ -1259,6 +1272,40 @@ button, input, textarea, select { font: inherit; }
 .job-grid-table .row-actions-col { min-width: 46px; width: 46px; text-align: center; }
 .required-star { color: var(--red); }
 
+.application-import-shell { max-width: 1180px; margin: 0 auto; }
+.application-import-shell .job-grid-header { position: relative; padding-right: 66px; }
+.application-import-shell .grid-close { position: absolute; top: 18px; right: 20px; }
+.application-import-table { max-width: 960px; margin: 0 auto; }
+.application-import-table .application-import-status-col {
+  min-width: 92px; width: 92px; padding: 8px; text-align: center;
+}
+.application-import-status {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 54px;
+  padding: 4px 8px; border-radius: 999px; font-size: 10px; font-weight: 650;
+  color: #7d7062; background: #ece7df;
+}
+.application-import-status.ready { color: #226c4b; background: #e2f2e8; }
+.application-import-status.error { color: #a53e37; background: var(--red-light); }
+.application-import-status.empty { color: #948779; background: transparent; }
+.application-import-result > .muted { margin-bottom: 14px; line-height: 1.6; }
+.application-import-result-grid {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px;
+}
+.application-import-result-card {
+  display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--bg);
+}
+.application-import-result-card strong { color: var(--blue); font-size: 23px; line-height: 1; }
+.application-import-result-card span { color: var(--text-tertiary); font-size: 11px; }
+.application-import-result-card.success strong { color: #317152; }
+.application-import-result-card.error strong { color: var(--red); }
+.application-import-result-card.muted strong { color: var(--text-secondary); }
+.application-import-errors {
+  max-height: 190px; overflow: auto; margin-top: 14px; padding: 12px 14px;
+  border: 1px solid rgba(185,72,62,.16); border-radius: 14px; background: var(--red-light);
+}
+.application-import-errors ul { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+
 @media (max-width: 768px) {
   .group-switcher { display: none; }
   .mobile-group-bar { display: block; margin-bottom: 12px; }
@@ -1284,7 +1331,22 @@ button, input, textarea, select { font: inherit; }
   .job-grid-table input, .job-grid-table textarea { min-height: 36px; padding: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); }
   .job-grid-table .row-number { position: static; grid-column: 1 / -1; width: auto; padding: 0; text-align: left; }
   .job-grid-table .row-number::before { content: "岗位行 "; display: inline; }
+  .application-import-table .row-number::before { content: "投递行 "; }
   .job-grid-table .row-actions-col { min-width: 0; width: auto; }
+  .application-import-shell .job-grid-header { padding-right: 54px; }
+  .application-import-shell .grid-close { top: 12px; right: 12px; }
+  .application-import-shell .job-grid-header-actions .btn:not(.grid-close) {
+    flex: 1 1 calc(50% - 6px); min-width: 120px;
+  }
+  .application-import-table tr { position: relative; }
+  .application-import-table .row-actions-col {
+    position: absolute; top: 7px; right: 7px; padding: 0;
+  }
+  .application-import-table .row-actions-col .icon-btn { min-width: 32px; min-height: 32px; padding: 4px; }
+  .application-import-table .application-import-status-col {
+    min-width: 0; width: auto; padding: 0; text-align: left;
+  }
+  .application-import-result-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .copy-link-row { flex-direction: column; }
   .activity-card { padding: 16px; gap: 12px; }
   .group-hub-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1849,10 +1911,16 @@ button { font: inherit; }
 .focus-count { flex-shrink: 0; padding: 5px 9px; border-radius: 999px; background: var(--bg); color: var(--text-tertiary); font-size: 11px; font-weight: 650; }
 .focus-count.has-items { background: var(--orange-light); color: var(--orange); }
 .focus-card-foot { margin-top: auto; padding-top: 14px; color: var(--text-tertiary); font-size: 11px; border-top: 1px solid rgba(46, 38, 28, .07); }
+.focus-card-foot-button {
+  width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left;
+  transition: color var(--transition);
+}
+.focus-card-foot-button:hover { color: var(--orange); }
 .text-action { border: 0; padding: 3px 0; background: transparent; color: var(--green); cursor: pointer; font-size: 12px; font-weight: 650; }
 .text-action:hover { color: var(--text); }
 
 .push-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.push-list.expanded { max-height: 640px; overflow-y: auto; padding-right: 4px; }
 .push-item {
   width: 100%; min-width: 0; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px;
   padding: 10px 11px; text-align: left; border: 1px solid rgba(46, 38, 28, .07); border-left: 3px solid var(--text-quaternary);
@@ -2017,12 +2085,12 @@ button { font: inherit; }
   .pipeline-stages::before { top: 22px; bottom: 22px; left: 13px; right: auto; width: 2px; height: auto; }
   .stage-item {
     display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 4px 8px;
-    min-width: 0; min-height: 48px; padding: 5px 0;
+    width: 100%; min-width: 0; min-height: 48px; padding: 5px 0;
   }
   .stage-dot { grid-column: 1; grid-row: 1 / span 2; justify-self: center; }
   .stage-label { grid-column: 2; grid-row: 1; text-align: left; white-space: normal; font-size: 12px; }
   .stage-status-text { grid-column: 3; grid-row: 1; text-align: right; }
-  .stage-time { grid-column: 2 / 4; grid-row: 2; justify-self: end; }
+  .stage-time { grid-column: 2 / 4; grid-row: 2; justify-self: end; width: auto; min-width: 86px; }
   .pipeline-footer { flex-wrap: wrap; gap: 8px; }
   .stage-action-bar { width: 100%; flex-wrap: wrap; }
   .stage-action-bar .btn { flex: 1; min-width: 0; justify-content: center; }

@@ -4,17 +4,22 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
-from ..models import Application, ApplicationStage, Group, Job, User, get_db
+from ..models import Application, ApplicationStage, Group, Job, Todo, User, get_db
 from ..services.stage_service import (
     DEFAULT_APPLICATION_STAGES,
     LEGACY_DEFAULT_APPLICATION_STAGES,
     is_assessment_stage,
     is_interview_stage,
     stage_statistics_bucket,
+)
+from ..services.application_import_service import (
+    import_application_rows,
+    parse_application_import_file,
+    serializable_import_rows,
 )
 from .deps import get_current_group, get_current_user
 
@@ -105,7 +110,7 @@ def _effective_current_stage(
     ordered_rows = _ordered_stage_rows(stage_rows)
     if app.status == "已完成":
         return ordered_rows[-1].stage if ordered_rows else (app.current_stage or "Offer")
-    if app.status == "已淘汰":
+    if app.status in ("已淘汰", "已拒绝"):
         return app.rejected_stage or app.current_stage
 
     for stage in ordered_rows:
@@ -139,7 +144,7 @@ def _reached_stage_index(
         idx for idx, stage in enumerate(ordered_rows)
         if stage.status in ("completed", "current")
     ]
-    if app.status == "已淘汰":
+    if app.status in ("已淘汰", "已拒绝"):
         rejected_idx = next(
             (idx for idx, stage in enumerate(ordered_rows) if stage.stage == app.rejected_stage),
             None,
@@ -262,6 +267,54 @@ def create_application(
     return _serialize_app(app, stages, job.url if job else None)
 
 
+@router.post("/import/preview")
+async def preview_application_import(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    """解析 Excel/CSV 为可编辑预览，不写入数据库。"""
+    del db, user, group  # 依赖仍用于鉴权与校验当前群组。
+    filename = file.filename or ""
+    if not filename.lower().endswith((".xlsx", ".csv")):
+        raise HTTPException(400, "请上传 .xlsx 或 .csv 文件")
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "文件是空的")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "文件不能超过 10MB")
+    try:
+        rows = parse_application_import_file(content, filename)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(400, f"表格解析失败：{exc}")
+    if not rows:
+        raise HTTPException(400, "表格中没有可识别的投递记录")
+    return serializable_import_rows(rows)
+
+
+@router.post("/import/rows")
+def import_application_row_data(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    group: Group = Depends(get_current_group),
+):
+    """批量匹配岗位、补充缺失岗位并创建个人投递流程。"""
+    rows = body.get("rows") if isinstance(body, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "请至少填写一条投递记录")
+    if len(rows) > 1000:
+        raise HTTPException(400, "单次最多导入 1000 条投递记录")
+    try:
+        return import_application_rows(db, user, group, rows)
+    except Exception:
+        db.rollback()
+        raise
+
+
 # GET /api/applications - 获取所有投递记录
 @router.get("")
 def list_applications(status: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -340,15 +393,17 @@ def application_dashboard(db: Session = Depends(get_db), user: User = Depends(ge
         Application.user_id == user.id
     ).all()
     by_stage = {s: 0 for s in ("投递", "简历筛选", "测评", "面试", "Offer")}
-    by_status = {"进行中": 0, "已淘汰": 0, "已完成": 0}
+    by_status = {"进行中": 0, "已淘汰": 0, "已拒绝": 0, "已完成": 0}
     for a in apps:
         if a.status == "已淘汰":
             by_status["已淘汰"] += 1
+        elif a.status == "已拒绝":
+            by_status["已拒绝"] += 1
         elif a.status == "已完成":
             by_status["已完成"] += 1
         else:
             by_status["进行中"] += 1
-        if a.status not in ("已淘汰", "已完成"):
+        if a.status not in ("已淘汰", "已拒绝", "已完成"):
             current = _effective_current_stage(a, a.stages)
             if current:
                 bucket = stage_statistics_bucket(current)
@@ -712,10 +767,29 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
 
     target_idx = stage_names.index(target_stage)
 
-    # 将目标阶段及之后的阶段全部重置为 pending
+    # 将目标阶段及之后的阶段全部重置为 pending。
     for stage in ordered[target_idx:]:
         stage.status = "pending"
         stage.completed_at = None
+
+    # 回退意味着目标阶段之后的安排不再有效。清空所有后续面试/测评信息，
+    # 日历会随之移除这些日程，同时删除用户从这些日程生成的关联待办。
+    later_stages = ordered[target_idx + 1:]
+    later_stage_ids = [stage.id for stage in later_stages if stage.id is not None]
+    for stage in later_stages:
+        stage.scheduled_at = None
+        stage.deadline_at = None
+        stage.schedule_type = "exact"
+        stage.location = None
+        stage.form = None
+        stage.notes = None
+        stage.feedback = None
+    if later_stage_ids:
+        db.query(Todo).filter(
+            Todo.user_id == user.id,
+            Todo.source_type == "calendar_stage",
+            Todo.source_id.in_(later_stage_ids),
+        ).delete(synchronize_session=False)
 
     # 将目标阶段之前最后一个标记为 completed（如果有的话）
     if target_idx > 0:
@@ -727,8 +801,8 @@ def rollback_stage(app_id: int, body: dict, db: Session = Depends(get_db), user:
 
     # 更新 current_stage
     _sync_current_stage(app, db, ordered)
-    # 如果之前是淘汰或已完成状态，回退即视为重新进行。
-    if app.status in ("已淘汰", "已完成"):
+    # 如果之前是淘汰、主动拒绝或已完成状态，回退即视为重新进行。
+    if app.status in ("已淘汰", "已拒绝", "已完成"):
         app.status = "进行中"
         if app.rejected_stage:
             app.rejected_stage = None
@@ -764,9 +838,35 @@ def reject_application(app_id: int, body: dict, db: Session = Depends(get_db), u
     return _serialize_app(app)
 
 
+@router.post("/{app_id}/decline")
+def decline_application(app_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """用户主动拒绝/放弃岗位，与公司淘汰分开记录。"""
+    app = db.query(Application).options(
+        joinedload(Application.stages),
+        joinedload(Application.job),
+    ).filter(
+        Application.id == app_id, Application.user_id == user.id
+    ).first()
+    if not app:
+        raise HTTPException(404, "投递记录不存在")
+    if "stage" not in body:
+        _sync_current_stage(app, db)
+    else:
+        valid_stages = {stage.stage for stage in (app.stages or [])}
+        if body.get("stage") not in valid_stages:
+            raise HTTPException(400, "无效的阶段名")
+    app.status = "已拒绝"
+    app.rejected_stage = body.get("stage", app.current_stage)
+    stage = next((item for item in (app.stages or []) if item.stage == app.rejected_stage), None)
+    if stage:
+        stage.status = "skipped"
+    db.commit()
+    return _serialize_app(app)
+
+
 @router.post("/{app_id}/restore")
 def restore_application(app_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """恢复已淘汰的投递"""
+    """恢复已淘汰或主动拒绝的投递。"""
     app = db.query(Application).options(
         joinedload(Application.stages),
         joinedload(Application.job),
