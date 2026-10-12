@@ -60,10 +60,20 @@ def get_current_group(
     user: User = Depends(get_current_user),
 ) -> Group:
     if x_group_id:
-        membership = active_membership(db, user.id, x_group_id)
-        if not membership and not is_platform_admin(user):
-            raise HTTPException(403, "你不在这个群组中")
-        group = db.get(Group, x_group_id)
+        if is_platform_admin(user):
+            group = db.get(Group, x_group_id)
+        else:
+            # 一次 JOIN 同时验证成员身份并取回群组，减少远程 PostgreSQL
+            # 上每个页面请求都要等待的额外网络往返。
+            group = db.query(Group).join(
+                GroupMember, GroupMember.group_id == Group.id
+            ).filter(
+                Group.id == x_group_id,
+                GroupMember.user_id == user.id,
+                GroupMember.status == "active",
+            ).first()
+            if not group:
+                raise HTTPException(403, "你不在这个群组中")
         if not group:
             raise HTTPException(404, "群组不存在")
         return group

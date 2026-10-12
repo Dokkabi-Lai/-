@@ -4,6 +4,7 @@ var _trackPagerIndex = 0;
 var _trackPagerData = [];
 var _trackQuery = "";
 var _trackApplications = null;
+var _trackCacheScope = null;
 
 function normalizedTrackStageName(stageName) {
   return String(stageName || "").replace(/\s+/g, "").toUpperCase();
@@ -41,6 +42,15 @@ function applicationHasEnteredInterview(app) {
 }
 
 window.load_track = async function() {
+  var cacheScope = String((currentUser && currentUser.id) || "anonymous");
+  if (_trackCacheScope !== cacheScope) {
+    _trackCacheScope = cacheScope;
+    _trackApplications = null;
+    try {
+      var cached = JSON.parse(localStorage.getItem("qiuzhao:track:" + cacheScope) || "null");
+      if (cached && Array.isArray(cached.items)) _trackApplications = sortTrackApplications(cached.items);
+    } catch (_) {}
+  }
   var page = document.getElementById("page-track");
   page.innerHTML = "";
   if (window._trackFilterPending) {
@@ -85,6 +95,7 @@ window.load_track = async function() {
   ));
 
   page.appendChild(el("div", { id: "track-list" }, el("div", { class: "loading" }, "加载中…")));
+  if (_trackApplications) renderTrackApplications(_trackApplications);
   loadApplications();
 };
 
@@ -101,12 +112,26 @@ function setTrackFilter(f) {
 async function loadApplications() {
   var box = document.getElementById("track-list");
   if (!box) return;
+  var requestScope = _trackCacheScope;
   try {
-    _trackApplications = sortTrackApplications(await API.get("/api/applications"));
+    var items = await API.get("/api/applications");
+    if (_trackCacheScope !== requestScope) return;
+    _trackApplications = sortTrackApplications(items);
+    persistTrackCache();
     renderTrackApplications(_trackApplications);
   } catch(e) {
     box.innerHTML = '<div class="card">加载失败: ' + e.message + '</div>';
   }
+}
+
+function persistTrackCache() {
+  if (!_trackApplications || !_trackCacheScope) return;
+  try {
+    localStorage.setItem("qiuzhao:track:" + _trackCacheScope, JSON.stringify({
+      savedAt: Date.now(),
+      items: _trackApplications
+    }));
+  } catch (_) {}
 }
 
 // 保存操作的接口会返回完整投递记录。直接更新本地卡片，避免每次操作后
@@ -123,6 +148,7 @@ function syncTrackApplication(updated) {
   if (index >= 0) _trackApplications[index] = updated;
   else _trackApplications.unshift(updated);
   sortTrackApplications(_trackApplications);
+  persistTrackCache();
   window._trackFocusId = updated.id;
   renderTrackApplications(_trackApplications);
   markApplicationViewsStale();
@@ -133,9 +159,63 @@ function removeTrackApplication(appId) {
     _trackApplications = _trackApplications.filter(function(item) {
       return String(item.id) !== String(appId);
     });
+    persistTrackCache();
     renderTrackApplications(_trackApplications);
   }
   markApplicationViewsStale();
+}
+
+function optimisticTrackUpdate(appId, updater) {
+  if (!_trackApplications) return null;
+  var index = _trackApplications.findIndex(function(item) {
+    return String(item.id) === String(appId);
+  });
+  if (index < 0) return null;
+  var snapshot = JSON.parse(JSON.stringify(_trackApplications[index]));
+  var draft = JSON.parse(JSON.stringify(snapshot));
+  updater(draft);
+  _trackApplications[index] = draft;
+  window._trackFocusId = appId;
+  renderTrackApplications(_trackApplications);
+  return snapshot;
+}
+
+function restoreOptimisticTrackUpdate(snapshot) {
+  if (!snapshot || !_trackApplications) return;
+  var index = _trackApplications.findIndex(function(item) {
+    return String(item.id) === String(snapshot.id);
+  });
+  if (index >= 0) _trackApplications[index] = snapshot;
+  else _trackApplications.unshift(snapshot);
+  window._trackFocusId = snapshot.id;
+  renderTrackApplications(_trackApplications);
+}
+
+function optimisticallyAdvance(app) {
+  var stages = app.stages || [];
+  var currentIndex = stages.findIndex(function(stage) { return stage.status === "current"; });
+  if (currentIndex < 0) {
+    currentIndex = stages.findIndex(function(stage) { return stage.stage === app.current_stage; });
+  }
+  if (currentIndex < 0) return;
+  stages[currentIndex].status = "completed";
+  stages[currentIndex].completed_at = stages[currentIndex].completed_at || new Date().toISOString();
+  var nextIndex = currentIndex + 1;
+  while (nextIndex < stages.length && stages[nextIndex].status === "skipped") nextIndex++;
+  if (nextIndex < stages.length) {
+    stages[nextIndex].status = "current";
+    app.current_stage = stages[nextIndex].stage;
+  } else {
+    app.status = "已完成";
+    app.current_stage = stages[currentIndex].stage;
+  }
+}
+
+function optimisticallyEnd(app, status, stageName) {
+  app.status = status;
+  app.rejected_stage = stageName;
+  var stage = (app.stages || []).find(function(item) { return item.stage === stageName; });
+  if (stage) stage.status = "skipped";
 }
 
 function markApplicationViewsStale() {
@@ -222,6 +302,11 @@ function renderTrackPager(data, renderer) {
   if (_trackPagerIndex < 0 || _trackPagerIndex >= _trackPagerData.length) _trackPagerIndex = 0;
 
   var pager = el("section", { class: "track-pager" });
+  var maxStageCount = _trackPagerData.reduce(function(maximum, app) {
+    return Math.max(maximum, (app.stages || []).length);
+  }, 0);
+  // 手机端为所有岗位预留同样高的阶段区域；超长自定义流程在卡片内部滚动。
+  pager.style.setProperty("--track-stage-rows", String(Math.min(7, Math.max(4, maxStageCount))));
   var identity = el("div", { class: "track-pager-identity" });
   var counter = el("span", { class: "track-pager-counter" });
   var cardWrap = el("div", { class: "track-pager-card track-pager-swipe-surface", "aria-live": "polite" });
@@ -438,6 +523,7 @@ function appCard(app) {
 
 async function advanceStage(appId, button) {
   if (button) { button.disabled = true; button.textContent = "处理中…"; }
+  var snapshot = optimisticTrackUpdate(appId, optimisticallyAdvance);
   try {
     var r = await API.post("/api/applications/" + appId + "/advance");
     // 检查是否拿到了offer
@@ -448,6 +534,7 @@ async function advanceStage(appId, button) {
     }
     syncTrackApplication(r);
   } catch(e) {
+    restoreOptimisticTrackUpdate(snapshot);
     if (button) { button.disabled = false; button.textContent = "✅ 通过"; }
     toast("操作失败: " + e.message);
   }
@@ -482,10 +569,14 @@ function showOfferCelebration(app) {
 function rejectAtStage(app, stage, button) {
   // 直接淘汰，无需弹窗
   if (button) { button.disabled = true; button.textContent = "处理中…"; }
+  var snapshot = optimisticTrackUpdate(app.id, function(draft) {
+    optimisticallyEnd(draft, "已淘汰", stage);
+  });
   API.post("/api/applications/" + app.id + "/reject", { stage: stage }).then(function(updated) {
     toast("❌ 已标记在「" + stage + "」淘汰");
     syncTrackApplication(updated);
   }).catch(function(e) {
+    restoreOptimisticTrackUpdate(snapshot);
     if (button) { button.disabled = false; button.textContent = "❌ 淘汰"; }
     toast("操作失败");
   });
@@ -494,10 +585,14 @@ function rejectAtStage(app, stage, button) {
 function declineAtStage(app, stage, button) {
   if (!confirm("确认主动拒绝「" + app.company + " · " + app.title + "」吗？之后可以在“已拒绝”中恢复。")) return;
   if (button) { button.disabled = true; button.textContent = "处理中…"; }
+  var snapshot = optimisticTrackUpdate(app.id, function(draft) {
+    optimisticallyEnd(draft, "已拒绝", stage);
+  });
   API.post("/api/applications/" + app.id + "/decline", { stage: stage }).then(function(updated) {
     toast("🙅 已标记为主动拒绝");
     syncTrackApplication(updated);
   }).catch(function() {
+    restoreOptimisticTrackUpdate(snapshot);
     if (button) { button.disabled = false; button.textContent = "🙅 拒绝"; }
     toast("操作失败");
   });

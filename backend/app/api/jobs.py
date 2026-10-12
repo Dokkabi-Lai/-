@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import desc, or_, select
+from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Application, Group, Job, JobMark, User, get_db
@@ -164,25 +164,21 @@ def list_jobs(
     elif applied == "unapplied":
         q = q.filter(~Job.id.in_(applied_ids_query))
     total = q.count()
-    rows = q.order_by(desc(Job.created_at)).offset(offset).limit(limit).all()
-    row_ids = [job.id for job in rows]
-    applied_ids = set()
-    marks = {}
-    if row_ids:
-        applied_ids = {
-            row[0]
-            for row in db.query(Application.job_id).filter(
-                Application.user_id == user.id,
-                Application.job_id.in_(row_ids),
-            ).all()
-            if row[0]
-        }
-        marks = _marks_map(db, user.id, row_ids)
+    applied_exists = select(Application.id).where(
+        Application.user_id == user.id,
+        Application.job_id == Job.id,
+    ).exists()
+    rows = q.outerjoin(
+        JobMark,
+        and_(JobMark.job_id == Job.id, JobMark.user_id == user.id),
+    ).add_entity(JobMark).add_columns(
+        applied_exists.label("is_applied")
+    ).order_by(desc(Job.created_at)).offset(offset).limit(limit).all()
     return {
         "total": total,
         "items": [
-            _serialize(j, j.id in applied_ids, marks.get(j.id), include_details=not summary)
-            for j in rows
+            _serialize(job, bool(is_applied), mark, include_details=not summary)
+            for job, mark, is_applied in rows
         ],
     }
 

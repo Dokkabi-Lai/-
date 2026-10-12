@@ -320,8 +320,10 @@ def import_application_row_data(
 def list_applications(status: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取所有投递记录，每条记录带上所有阶段信息。"""
     q = db.query(Application).options(
-        selectinload(Application.stages),
-        selectinload(Application.job),
+        # 列表首次打开时一次取回岗位链接与流程，避免云数据库上连续等待
+        # applications / stages / jobs 三个查询的网络往返。
+        joinedload(Application.stages),
+        joinedload(Application.job),
     ).filter(
         Application.user_id == user.id
     )

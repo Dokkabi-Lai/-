@@ -5,7 +5,9 @@ window.load_jobs = async function() {
     _jobCache = null;
     _jobCacheTotal = 0;
     _jobCacheGroupId = cacheScope;
+    _jobCacheSavedAt = 0;
     _expandedJobCompanies = {};
+    restoreJobCache();
   }
   var page = document.getElementById("page-jobs");
   page.innerHTML = "";
@@ -114,8 +116,36 @@ var _jobsRequestId = 0;
 var _jobCache = null;
 var _jobCacheTotal = 0;
 var _jobCacheGroupId = null;
+var _jobCacheSavedAt = 0;
 var _expandedJobCompanies = {};
 function debounceJobs() { clearTimeout(_jobTimer); _jobTimer = setTimeout(loadJobs, 80); }
+
+function jobCacheStorageKey() {
+  return "qiuzhao:jobs:" + String(_jobCacheGroupId || "anonymous:0");
+}
+
+function restoreJobCache() {
+  try {
+    var cached = JSON.parse(localStorage.getItem(jobCacheStorageKey()) || "null");
+    if (cached && Array.isArray(cached.items)) {
+      _jobCache = cached.items;
+      _jobCacheTotal = Number(cached.total || cached.items.length);
+      _jobCacheSavedAt = Number(cached.savedAt || 0);
+    }
+  } catch (_) {}
+}
+
+function persistJobCache() {
+  if (!_jobCache) return;
+  _jobCacheSavedAt = Date.now();
+  try {
+    localStorage.setItem(jobCacheStorageKey(), JSON.stringify({
+      savedAt: _jobCacheSavedAt,
+      total: _jobCacheTotal,
+      items: _jobCache
+    }));
+  } catch (_) {}
+}
 
 function setAppliedFilter(v) {
   _jobApplyFilter = v;
@@ -133,6 +163,10 @@ async function loadJobs(options) {
   if (!list) return;
   if (_jobCache && !options.refresh) {
     renderJobsFromCache();
+    // 先展示上一次结果，再静默校准远端数据；导航和搜索都无需等待网络。
+    if (Date.now() - _jobCacheSavedAt > 20000) {
+      loadJobs({ refresh: true, silent: true });
+    }
     return;
   }
   var requestId = ++_jobsRequestId;
@@ -145,6 +179,7 @@ async function loadJobs(options) {
     if (requestId !== _jobsRequestId) return;
     _jobCache = data.items || [];
     _jobCacheTotal = data.total || _jobCache.length;
+    persistJobCache();
     loadFilterOptions();
     renderJobsFromCache();
     return true;
@@ -154,6 +189,26 @@ async function loadJobs(options) {
     return false;
   }
 }
+
+window.prefetchJobs = function() {
+  var cacheScope = String((currentUser && currentUser.id) || "anonymous") + ":" + String(getActiveGroupId());
+  if (_jobCacheGroupId !== cacheScope) {
+    _jobCacheGroupId = cacheScope;
+    _jobCache = null;
+    _jobCacheTotal = 0;
+    _jobCacheSavedAt = 0;
+    restoreJobCache();
+  }
+  if (_jobCache && Date.now() - _jobCacheSavedAt <= 20000) return;
+  var requestedScope = cacheScope;
+  var params = new URLSearchParams({ summary: "true", limit: "1000", hide_passed: "false" });
+  API.get("/api/jobs?" + params).then(function(data) {
+    if (_jobCacheGroupId !== requestedScope) return;
+    _jobCache = data.items || [];
+    _jobCacheTotal = data.total || _jobCache.length;
+    persistJobCache();
+  }).catch(function() {});
+};
 
 function renderJobsFromCache() {
   var list = document.getElementById("job-list");
@@ -396,6 +451,7 @@ async function deleteJob(j) {
     closeModal();
     _jobCache = (_jobCache || []).filter(function(job) { return String(job.id) !== String(j.id); });
     _jobCacheTotal = Math.max(0, _jobCacheTotal - 1);
+    persistJobCache();
     loadFilterOptions();
     renderJobsFromCache();
   } catch (e) {
@@ -432,6 +488,7 @@ function quickApply(j) {
         if (typeof invalidatePages === "function") invalidatePages();
         var cached = cachedJob(j.id);
         if (cached) cached.applied = true;
+        persistJobCache();
         renderJobsFromCache();
       } catch(e) {
         submitButton.disabled = false;
@@ -449,6 +506,7 @@ async function toggleCompanyPass(company) {
     (_jobCache || []).forEach(function(job) {
       if (job.company === company) job.passed = result.passed;
     });
+    persistJobCache();
     toast("已更新 " + company);
     renderJobsFromCache();
   } catch(e) { toast("操作失败: " + e.message); }
@@ -459,6 +517,7 @@ async function togglePass(id) {
     var r = await API.post("/api/jobs/" + id + "/pass");
     var job = cachedJob(id);
     if (job) job.passed = r.passed;
+    persistJobCache();
     toast(r.passed ? "已标记Pass" : "已取消Pass");
     renderJobsFromCache();
   } catch(e) { toast("操作失败"); }
@@ -469,6 +528,7 @@ async function toggleFav(id) {
     var r = await API.post("/api/jobs/" + id + "/favorite");
     var job = cachedJob(id);
     if (job) job.favorited = r.favorited;
+    persistJobCache();
     toast(r.favorited ? "已收藏" : "已取消收藏");
     renderJobsFromCache();
   } catch(e) { toast("操作失败"); }
@@ -519,6 +579,7 @@ async function submitAddJob(button) {
     if (!_jobCache) _jobCache = [];
     _jobCache.unshift(created);
     _jobCacheTotal += 1;
+    persistJobCache();
     closeModal();
     toast("岗位已添加");
     loadFilterOptions();

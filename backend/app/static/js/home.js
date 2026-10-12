@@ -1,17 +1,51 @@
+var _homeCacheMemory = {};
+
+function homeCacheKey() {
+  return "qiuzhao:home:" + String((currentUser && currentUser.id) || "anonymous") + ":" + String(getActiveGroupId());
+}
+
+function readHomeCache() {
+  var key = homeCacheKey();
+  if (_homeCacheMemory[key]) return _homeCacheMemory[key];
+  try {
+    var cached = JSON.parse(localStorage.getItem(key) || "null");
+    if (cached && cached.data) {
+      _homeCacheMemory[key] = cached;
+      return cached;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function writeHomeCache(data, key) {
+  key = key || homeCacheKey();
+  var cached = { savedAt: Date.now(), data: data };
+  _homeCacheMemory[key] = cached;
+  try { localStorage.setItem(key, JSON.stringify(cached)); } catch (_) {}
+}
+
 window.load_home = async function() {
   var page = document.getElementById("page-home");
-  page.innerHTML = '<div class="home-loading"><span class="loading-orb"></span><span>正在整理今天的重点…</span></div>';
+  var requestKey = homeCacheKey();
+  var cached = readHomeCache();
+  if (cached) renderHome(cached.data || {});
+  else page.innerHTML = '<div class="home-loading"><span class="loading-orb"></span><span>正在整理今天的重点…</span></div>';
   try {
     var data = await API.get("/api/home");
+    writeHomeCache(data || {}, requestKey);
+    if (homeCacheKey() !== requestKey) return;
     renderHome(data || {});
 
     var later = window.requestIdleCallback || function(fn) { setTimeout(fn, 500); };
     later(function() {
       if (typeof loadDashboard === "function") loadDashboard();
+      if (typeof prefetchJobs === "function") prefetchJobs();
     });
   } catch(e) {
-    page.innerHTML = "";
-    page.appendChild(el("div", { class: "card error-card" }, "加载失败：" + e.message));
+    if (!cached) {
+      page.innerHTML = "";
+      page.appendChild(el("div", { class: "card error-card" }, "加载失败：" + e.message));
+    }
   }
 };
 

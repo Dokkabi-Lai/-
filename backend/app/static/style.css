@@ -2533,3 +2533,55 @@ button { font: inherit; }
   .todo-meta { font-size: 10px; }
   .todo-add { min-height: 38px; padding: 8px 11px; }
 }
+
+/* === 手机端稳定布局与原生触控体验 === */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+body { max-width: 100%; overflow-x: hidden; overscroll-behavior-x: none; }
+button, a, [role="button"] { touch-action: manipulation; }
+.company-group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 170px;
+}
+
+@media (max-width: 768px) {
+  /* iOS 会在聚焦小于 16px 的表单项时自动放大页面。 */
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea,
+  .input,
+  .select,
+  .textarea,
+  .track-search-input,
+  .filter-input,
+  .workflow-stage-input,
+  .workflow-new-stage-input,
+  .tag-custom-input,
+  .job-grid-table input,
+  .job-grid-table textarea {
+    font-size: 16px !important;
+  }
+
+  .track-pager-card > .pipeline-card {
+    display: flex;
+    flex-direction: column;
+  }
+  .track-pager-card > .pipeline-card .pipeline-stages {
+    box-sizing: border-box;
+    height: calc(var(--track-stage-rows, 7) * 48px + 16px);
+    min-height: calc(var(--track-stage-rows, 7) * 48px + 16px);
+    max-height: calc(var(--track-stage-rows, 7) * 48px + 16px);
+    align-content: start;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .track-pager-card > .pipeline-card .pipeline-footer { margin-top: auto; }
+  .track-pager-foot { min-height: 78px; align-content: flex-start; }
+}
